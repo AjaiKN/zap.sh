@@ -1,0 +1,638 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+# shellcheck disable=SC2154
+trap 's=$?; echo >&2 "$0: Error on line "$LINENO": $BASH_COMMAND"; exit $s' ERR
+
+# Also see (cross-platform):
+# - the Emacs `move-file-to-trash` command
+# - https://github.com/sindresorhus/trash
+
+# https://stackoverflow.com/a/21188136
+# Mostly like `realpath --no-symlinks`, but --no-symlinks is only available for GNU realpath.
+get_abs_filename() {
+	local dirname basename
+	dirname=$(dirname -- "$1") || exit 2
+	if [ -d "$dirname" ]; then
+		basename=$(basename -- "$1") || exit 2
+		printf "%s" "$(cd "$dirname" >/dev/null && pwd)/${basename}"
+	else
+		echo "Directory does not exist: $dirname" >&2
+		return 1
+	fi
+}
+
+print_usage() {
+	# NOTE: When this changes, rerun $DOTFILES/scripts/generate-manpages.sh
+	cat <<EOF
+Usage: $0 [OPTION]... [--] FILE...
+Put each FILE in the trash. Currently supports macOS and Linux.
+
+  -h, --help               Show this usage message.
+  -f, --force              Override non-writable files, and ignore nonexistent or otherwise untrashable files.
+                           If any of the files are owned by the current user but don't have write permissions,
+                           delete them anyway. If any of the files are nonexistent, or if we can't trash them
+                           (because their directories aren't writable and executable), ignore them and still
+                           trash everything else. (Otherwise, this command will refuse to do anything if any
+                           of the arguments are untrashable.)
+  -n, --dry-run            Don't actually trash anything; just print what this command *would* do.
+                           This option implies --verbose.
+  -v, --verbose            Be more verbose.
+  -s, --strategy=STRATEGY  Specify which trashing strategy to use.
+                           Can also be specified with the TRASH_STRATEGY environment variable, which this
+                           option supersedes.
+  -d, --dir                Does nothing. For compatibility with rm.
+  -r, -R, --recursive      Does nothing. For compatibility with rm.
+
+*Available strategies*
+  freedesktop              (default on Linux) Use the freedesktop.org Trash Specification:
+                           https://specifications.freedesktop.org/trash-spec/1.0/
+  macos_trash_command      (default on macOS >=14.0) Use the built-in macOS /usr/bin/trash command
+  macos_applescript        (default on macOS <14.0) Use AppleScript
+  macos_mv                 Use mv to move to ~/.Trash/
+  gio                      Use the 'gio trash' command
+  kioclient                Use the 'kioclient move FILE... trash:/' command
+  trash_cli                Use trash-put from trash-cli: https://github.com/andreafrancia/trash-cli
+  dangerous_rm             Use rm
+  dangerous_shred          Use GNU shred
+EOF
+	# SEE ALSO:
+	#   rm(1), mv(1), find(1), unlink(1)
+}
+
+urlencode_help() {
+	# https://askubuntu.com/a/712206
+	local LC_ALL=C c
+	while IFS= read -r -n1 -d '' c
+	do
+		if [[ $c = [a-zA-Z0-9/.~_-] ]]
+		then
+			printf %s "$c"
+		else
+			printf %%%02X "'$c"
+		fi
+	done
+}
+urlencode() {
+	printf '%s' "$1" | urlencode_help
+}
+
+can_delete_file() {
+	# File must exist.
+	# (If it's a broken symlink, -e will return false, but -L will return true.)
+	if [ ! -e "$1" ] && [ ! -L "$file" ]; then
+		echo "trash: File '$file' does not exist" >&2
+		return 1
+	fi
+	# If we're the superuser, we can always delete.
+	if [ "$EUID" -eq 0 ]; then
+		return 0
+	fi
+	# To delete a file, all you need is write and execute permissions on its parent directory.
+	local dir
+	dir=$(dirname -- "$1") || return 1
+	if [ ! -w "$dir" ] || [ ! -x "$dir" ]; then
+		echo "Cannot trash '$file' because we don't have write and execute permissions on its parent directory '$(dirname "$file")'" >&2
+		return 1
+	fi
+}
+
+is_writable_by_current_user() {
+	# If we're the superuser, permissions don't matter.
+	if [ "$EUID" -eq 0 ]; then
+		return 0
+	fi
+	# Permissions for a symlink don't matter (except on Mac, but only when following the symlink; deleting it is always fine).
+	if [ -L "$1" ]; then
+		return 0
+	fi
+	# Check if writable.
+	if [ ! -w "$1" ]; then
+		echo "trash: The file '$file' is not writable by the current user. Use --force to override." >&2
+		return 1
+	fi
+}
+
+# https://unix.stackexchange.com/a/44267
+# https://pubs.opengroup.org/onlinepubs/7908799/xcu/df.html
+is_same_filesystem() {
+	df -P "$(get_abs_filename "$1")" "$(get_abs_filename "$2")" | awk 'NR==2 {dev1=$1} NR==3 {exit($1!=dev1)}'
+}
+
+can_read_file() {
+	# If we're the superuser, we can always read.
+	if [ "$EUID" -eq 0 ]; then
+		return 0
+	fi
+	# If we own the file, we can always read it.
+	if [ -O "$1" ]; then
+		return 0
+	fi
+	# Check if readable.
+	[ -r "$1" ]
+}
+
+can_move_to() {
+	local destdir
+	destdir="$1"
+	shift
+
+	local file
+	for file in "$@"; do
+		# If the file and destination directory aren't on the same filesystem, then
+		# mv will need to copy instead of rename. In order to copy, we need to read
+		# the file.
+		if ! is_same_filesystem "$file" "$destdir" && ! can_read_file "$file"; then
+			return 1
+		fi
+	done
+}
+
+### freedesktop helpers
+
+# detect stat flavor
+stattype=""
+if command -v stat >/dev/null 2>&1; then
+	if stat -c %d / >/dev/null 2>&1; then
+		stattype=gnu
+	elif stat -f %d / >/dev/null 2>&1; then
+		stattype=bsd
+	fi
+fi
+stat_device() {
+	if [ "$stattype" = gnu ]; then
+		stat -c %d "$1"
+	elif [ "$stattype" = bsd ]; then
+		stat -f %d "$1"
+	else
+		return 2
+	fi
+}
+stat_mtime() {
+	if [ "$stattype" = gnu ]; then
+		stat -c %Y "$1"
+	elif [ "$stattype" = bsd ]; then
+		stat -f %m "$1"
+	else
+		return 2
+	fi
+}
+
+# mountpoint_of FILE
+# prints the mountpoint containing FILE (resolves symlinks).
+# FILE should be an absolute path.
+mountpoint_of() {
+	local path
+	# canonicalize
+	path=$(cd "$1" 2>/dev/null && pwd -P) || return 2
+
+	mountpoint_of___helper "$path" ||
+		# fallback: use df (POSIX df -P if available). Prints mountpoint column from df.
+		df -P "$path" 2>/dev/null | awk 'NR==2{print $6; exit}'
+}
+mountpoint_of___helper() {
+	local dev parent parentdev
+	dev=$(stat_device "$1") || return 2
+
+	while [ "$1" != "/" ]; do
+		parent=$(dirname -- "$1") || return 2
+		parentdev=$(stat_device "$parent") || return 2
+		if [ "$parentdev" = "$dev" ]; then
+			set -- "$parent"
+		else
+			printf '%s\n' "$1"
+			return 0
+		fi
+	done
+
+	# reached root
+	printf '%s\n' /
+}
+
+home_mountpoint=
+get_top_freedesktop_trashdir() {
+	local topdir
+
+	if [ -z "$home_mountpoint" ]; then
+		home_mountpoint=$(mountpoint_of "${XDG_DATA_HOME:-$HOME/.local/share}") || return 1
+	fi
+	topdir="$(mountpoint_of "$1")" || return 1
+
+	# When trashing a file from a non-home partition/device [4], ...
+	# [4] To be more precise, from a partition/device different from the one on which $XDG_DATA_HOME resides.
+	if [ "$topdir" != "$home_mountpoint" ]; then
+		# ... an implementation (if it supports trashing in top directories) MUST check for
+		# the presence of $topdir/.Trash.
+		if
+			[ -d "$topdir/.Trash" ] &&
+				# If this directory is present, the implementation MUST, by default,
+				# check for the “sticky bit”.
+				[ -k "$topdir/.Trash" ] &&
+				# The implementation also MUST check that this directory is not a
+				# symbolic link.
+				[ ! -L "$topdir/.Trash" ] &&
+				# If the directory exists and passes the checks, a subdirectory of the
+				# $topdir/.Trash directory is to be used as the user’s trash directory for
+				# this partition/device. The name of this subdirectory is the numeric
+				# identifier of the current user ($topdir/.Trash/$uid). When trashing a
+				# file, if this directory does not exist for the current user, the
+				# implementation MUST immediately create it, without any warnings or
+				# delays for the user.
+				mkdir -p "$topdir/.Trash/$UID"/{files,info} 2>/dev/null
+		then
+			printf '%s\n' "$topdir/.Trash/$UID"
+			return
+		fi
+
+		# (2) If an $topdir/.Trash directory is absent, an $topdir/.Trash-$UID
+		# directory is to be used as the user’s trash directory for this
+		# device/partition. $UID is the user’s numeric identifier.
+		if mkdir -p "$topdir/.Trash-$UID"/{files,info} 2>/dev/null
+		then
+			printf '%s\n' "$topdir/.Trash-$UID"
+			return
+		fi
+	fi
+
+	return 3
+}
+
+get_freedesktop_trashdir() {
+	local ret
+	ret=$(get_top_freedesktop_trashdir "$1") ||
+		ret="${XDG_DATA_HOME:-$HOME/.local/share}/Trash"
+
+	mkdir -p "$ret"/{files,info}
+
+	printf '%s\n' "$ret"
+}
+
+## Parse options
+force=
+dry_run=
+verbose=
+# verbose by default if sudo
+[ "$EUID" -ne 0 ] || verbose=1
+# TODO: implement interactive
+# 0 (-f OR --interactive=never): never prompt
+# 1 (default): prompt if write-protected and standard output is a terminal
+# 2 (-I): prompt once
+# 3 (-i): prompt always
+interactive=1
+# TODO: maybe add --sudo option (or maybe prompt in that case if interactive>=1)
+# that uses sudo to change the ownership before trashing if we don't have the
+# permissions, since:
+# 1. sudo changes $HOME to /root and unsets $XDG_DATA_HOME on Linux, and
+# 2. we probably don't want unmovable stuff in our user trash
+# TODO: add --strategy option
+while [[ $# -gt 0 ]]; do
+	opt="$1"
+	case "$1" in
+		-h|--help)
+			print_usage
+			exit 1
+			;;
+		-f|--force)
+			force=1
+			interactive=0
+			shift
+			;;
+		-n|--dry-run)
+			dry_run=1
+			verbose=1
+			shift
+			;;
+		-d|--dir|-r|-R|--recursive) #no-op, for rm compatibility
+			shift
+			;;
+		-v|--verbose)
+			verbose=1
+			shift
+			;;
+		--interactive=never|--interactive=no|--interactive=none)
+			interactive=0
+			shift
+			echo "TODO: implement -i/-I/--interactive"; exit 1
+			;;
+		-I|--interactive=once)
+			interactive=2
+			shift
+			echo "TODO: implement -i/-I/--interactive"; exit 1
+			;;
+		-i|--interactive|--interactive=always|--interactive=yes)
+			interactive=3
+			shift
+			echo "TODO: implement -i/-I/--interactive"; exit 1
+			;;
+		--interactive=*)
+			# message from GNU rm
+			echo "trash: ambiguous argument ‘$1’
+Valid arguments for ‘--interactive’ are:
+  - ‘never’, ‘no’, ‘none’
+  - ‘once’
+  - ‘always’, ‘yes’
+Try '$0 --help' for more information."
+			exit 1
+			;;
+		--strategy|-s)
+			TRASH_STRATEGY="$2"
+			shift
+			shift
+			;;
+		--strategy=*)
+			arg=${1#--strategy=}
+			shift
+			set -- --strategy "$arg" "$@"
+			;;
+		--version) # necessary for man2help
+			echo "trash 0.1-pre"
+			exit
+			;;
+		--)
+			shift
+			break
+			;;
+		-[^-][^-]*) # expand multiple single-char options (e.g. -rf)
+			shift
+			other="${opt#-?}"
+			set -- "${opt%"$other"}" "-${other}" "$@"
+			;;
+		-*)
+			echo "ERROR: Unknown option: $1" >&2
+			print_usage
+			exit 1
+			;;
+		*)
+			break
+			;;
+	esac
+done
+
+if [[ $# -eq 0 ]] && [ -z $force ]; then
+	print_usage
+	exit 1
+fi
+
+## Checks
+files=()
+for file in "$@"; do
+	if ! can_delete_file "$file"; then
+		[ -n "$force" ] || exit 1
+	elif [ -z "$force" ] && ! is_writable_by_current_user "$file"; then
+		exit 1
+	else
+		# TODO: If the destination directory is on a different filesystem, the file
+		# is owned by another user, we're not the superuser, and we don't have read
+		# permissions on the file, then we won't be able to move it. See the
+		# can_move_to() function above.
+		file=$(get_abs_filename "$file")
+		[ -z "$verbose" ] || echo "Will trash $file"
+		files+=("$file")
+	fi
+done
+set -- "${files[@]}"
+
+for file in "$@"; do
+	echo "$file"
+done
+
+if [[ $# -eq 0 ]]; then
+	if [ -n "$force" ]; then
+		exit
+	else
+		echo "Nothing to delete"
+		exit 1
+	fi
+fi
+
+## Choose strategy
+
+choose_strategy() {
+	UNAME=$( command -v uname) # https://gist.github.com/prabirshrestha/3080525?permalink_comment_id=2962265#gistcomment-2962265
+	case $( "${UNAME}" | tr '[:upper:]' '[:lower:]') in
+		msys*|cygwin*|mingw*|nt|win*)
+			echo "Windows isn't currently supported!" >&2
+			return 1
+	esac
+
+	if [ "$(uname -s)" = "Darwin" ]; then
+		if [ -x /usr/bin/trash ]; then
+			# introduced in macOS 14.0
+			echo macos_trash_command
+			return
+		elif command -v osascript >/dev/null 2>&1; then
+			echo macos_applescript
+			return
+		fi
+	fi
+
+	echo freedesktop
+	return
+}
+
+TRASH_STRATEGY=${TRASH_STRATEGY:-$(choose_strategy)}
+[ -n "$verbose" ] && echo "Using strategy: $TRASH_STRATEGY" >&2
+
+## Execute
+
+# check that none of the arguments are sub/superdirectories of the trash directory
+check_not_trash_sub_or_super_directory() {
+	if [ -z "$force" ] && command -v realpath >/dev/null 2>&1; then
+		trash_realpath="$(realpath "$trash")" || exit 2
+		for file in "$@"; do
+			if [ ! -L "$file" ]; then
+				file_realpath="$(realpath "$file")" || exit 2
+				if [[ "$file_realpath"/ == "$trash_realpath"/* ]]; then
+					echo "Error: '$file_realpath' is a subdirectory of the trash directory '$trash_realpath'"
+					exit 1
+				elif [[ "$trash_realpath"/ == "$file_realpath"/* ]]; then
+					echo "Error: '$file_realpath' is a superdirectory of the trash directory '$trash_realpath'"
+					exit 1
+				fi
+			fi
+		done
+	fi
+}
+
+if [ -n "$force" ]; then
+	set +euo pipefail
+fi
+
+case "$TRASH_STRATEGY" in
+	freedesktop)
+		# https://specifications.freedesktop.org/trash-spec/latest/
+		set -o noclobber # don't overwrite file when using >
+		for file in "$@"; do
+			trash=$(get_freedesktop_trashdir "$file")
+			check_not_trash_sub_or_super_directory "$file"
+			thedate=$(date +"%Y-%m-%dT%H:%M:%S")
+			dest_filename=$(basename -- "$file")
+			if [ -e "$trash/info/$dest_filename.trashinfo" ] || [ -L "$trash/info/$dest_filename.trashinfo" ] || [ -e "$trash/files/$dest_filename" ] || [ -L "$trash/files/$dest_filename" ]; then
+				dest_filename="$(basename -- "$file") $thedate"
+			fi
+			while [ -e "$trash/info/$dest_filename.trashinfo" ] || [ -L "$trash/info/$dest_filename.trashinfo" ] || [ -e "$trash/files/$dest_filename" ] || [ -L "$trash/files/$dest_filename" ]; do
+				dest_filename="$(basename -- "$file") $thedate $RANDOM"
+			done
+			while : ; do
+				[ -z "$verbose" ] || printf 'Writing to "%s":\n\t[Trash Info]\n\tPath=%s\n\tDeletionDate=%s\n' "$trash/info/$dest_filename.trashinfo" "$(urlencode "$file")" "$thedate" >&2
+				if [ -n "$dry_run" ] || printf '[Trash Info]\nPath=%s\nDeletionDate=%s\n' "$(urlencode "$file")" "$thedate" >"$trash/info/$dest_filename.trashinfo"; then
+					break
+				else
+					printf 'Failed to write! Trying a different name. ' >&2
+					dest_filename="$(basename -- "$file") $thedate $RANDOM$RANDOM"
+				fi
+			done
+			[ -z "$verbose" ] || echo mv -n "'$file'" "'$trash/files/$dest_filename'" >&2
+			[ -n "$dry_run" ] || mv -n "$file" "$trash/files/$dest_filename"
+		done
+		;;
+
+	macos_applescript)
+		trash="$HOME/.Trash" check_not_trash_sub_or_super_directory "$@"
+		# Strategy: use AppleScript like the following to delete files/directories.
+		#   tell application "Finder" to delete every item of {(POSIX file "/path/one"), (POSIX file "/path/two")}
+		# (https://github.com/ali-rantakari/trash/blob/d33f12fb91d2ccb553098e0f0aea57a2add77e09/trash.m#L284C10-L285C64)
+		applescript_list=
+		for file in "$@"; do
+			# get full path, then replace \ with \\, then replace " with \"
+			# (in case there are any backslashes or double quotes in the file name itself,
+			# we're escaping for the AppleScript string - https://www.oreilly.com/library/view/applescript-the-definitive/0596102119/ch13s07.html )
+			fullpath=$(get_abs_filename "$file" | sed 's/\\/\\\\/g' | sed 's/\"/\\\"/g')
+			applescript_list="$applescript_list(POSIX file \"$fullpath\"), "
+		done
+		# remove trailing comma and space
+		applescript_list="${applescript_list%, }"
+		command="tell app \"Finder\" to delete every item of {$applescript_list}"
+		echo "$command" >&2
+		[ -n "$dry_run" ] || osascript -e "$command" >/dev/null
+		;;
+
+	macos_mv)
+		trash="$HOME/.Trash"
+		if ! [ -d "$trash" ]; then
+			echo "trash: $trash does not exist" >&2
+			exit 1
+		fi
+		check_not_trash_sub_or_super_directory "$@"
+		[ -z "$verbose" ] || echo "Trash directory: '$trash'"
+		# TODO: check that none of the arguments are superdirectories of the trash directory
+		for file in "$@"; do
+			dest_filename=$(basename -- "$file")
+			while [ -e "$trash/$dest_filename" ] || [ -L "$trash/$dest_filename" ]; do
+				dest_filename="$dest_filename $(date +"%Y-%m-%dT%H:%M:%S")"
+			done
+			[ -z "$verbose" ] || echo mv -n "'$file'" "'$trash/$dest_filename'"
+			[ -n "$dry_run" ] || mv -n "$file" "$trash/$dest_filename"
+		done
+		;;
+
+	macos_trash_command)
+		trash="$HOME/.Trash" check_not_trash_sub_or_super_directory "$@"
+		# introduced in macOS 14.0
+		options=()
+		[ -n "$force"   ] || options+=(--stopOnError)
+		[ -z "$verbose" ] || options+=(--verbose)
+		[ -z "$verbose" ] || echo /usr/bin/trash "${options[@]}" "$@"
+		# /usr/bin/trash doesn't support `--`, but that should be fine because we're
+		# using absolute paths.
+		[ -n "$dry_run" ] || /usr/bin/trash "${options[@]}" "$@"
+		;;
+
+	gio)
+		# NOTE: This errors sometimes:
+		#   gio: file:///tmp/a: Trashing on system internal mounts is not supported
+		#
+		# The freedesktop.org spec (https://specifications.freedesktop.org/trash-spec/latest/#trash-directories )
+		# does *allow* implementations to error in this situation, though it also allows
+		# implementations to just put everything in the "home trash" directory, which is
+		# what we do in the freedesktop strategy.
+		# https://www.inmotionhosting.com/support/server/linux/send-files-to-trash-with-gio-trash/
+		options=()
+		[ -z "$force"   ] || options+=(--force)
+		[ -z "$verbose" ] || echo gio trash "${options[@]}" -- "$@"
+		[ -n "$dry_run" ] || gio trash "${options[@]}" -- "$@"
+		;;
+
+	kioclient)
+		pre_options=(--noninteractive --platform offscreen)
+		options=()
+		[ -z "$verbose" ] || echo kioclient "${pre_options[@]}" move "${options[@]}" -- "$@" trash:/
+		[ -n "$dry_run" ] || kioclient "${pre_options[@]}" move "${options[@]}" -- "$@" trash:/
+		;;
+
+	trash_cli)
+		# https://github.com/andreafrancia/trash-cli
+		options=()
+		[ -z "$force"   ] || options+=(--force)
+		[ -z "$verbose" ] || options+=(--verbose)
+		[ -z "$verbose" ] || echo trash-put "${options[@]}" -- "$@"
+		[ -n "$dry_run" ] || trash-put "${options[@]}" -- "$@"
+		;;
+
+	dangerous_rm)
+		# https://pubs.opengroup.org/onlinepubs/9699919799/utilities/rm.html
+		options=(-f)
+		# [ -z "$force"   ] || options+=(-f)
+		[ -z "$verbose" ] || echo rm "${options[@]}" "$@"
+		# POSIX rm doesn't support `--` (though GNU and BSD rm both do), but that
+		# should be fine because we're using absolute paths.
+		[ -n "$dry_run" ] || rm "${options[@]}" "$@"
+		;;
+
+	dangerous_shred)
+		# https://www.gnu.org/software/coreutils/manual/html_node/shred-invocation.html
+		options=(--remove --zero --force)
+		# [ -z "$force"   ] || options+=(--force)
+		[ -z "$verbose" ] || options+=(--verbose)
+		[ -z "$verbose" ] || echo shred "${options[@]}" -- "$@"
+		[ -n "$dry_run" ] || shred "${options[@]}" -- "$@"
+		;;
+
+	*)
+		echo "Unrecognized strategy: $TRASH_STRATEGY" >&2
+		exit 1
+		;;
+esac
+
+## Notes
+
+# Also see
+# https://github.com/umlx5h/gtrash/blob/main/doc/alternatives.md
+# https://github.com/umlx5h/gtrash?tab=readme-ov-file#related-projects
+# https://github.com/rushsteve1/trash-d?tab=readme-ov-file#similar-projects
+
+### Mac
+# Also see
+# https://github.com/sindresorhus/trash/blob/main/lib/macos.js
+# https://github.com/sindresorhus/macos-trash/issues/4#issuecomment-1118391118
+# https://github.com/ali-rantakari/trash (probably the best because of https://github.com/ali-rantakari/trash?tab=readme-ov-file#the-put-back-feature )
+# https://hasseg.org/blog/post/406/trash-files-from-the-os-x-command-line/ (blog post by the author of above)
+# https://github.com/morgant/tools-osx/blob/master/src/trash
+
+### Windows
+# Also see
+# https://github.com/sindresorhus/trash (uses recycle-bin below)
+# https://github.com/sindresorhus/recycle-bin
+# https://github.com/kizzx2/cmd-recycle
+
+### WSL
+# For now, I'll just treat WSL as Linux.
+#
+# Also see
+# https://gist.github.com/prabirshrestha/3080525?permalink_comment_id=2962265#gistcomment-2962265
+# https://superuser.com/questions/1185033/what-is-the-home-directory-on-windows-subsystem-for-linux
+# https://www.jakewiesler.com/blog/deleting-files-in-wsl
+# https://github.com/sindresorhus/trash-cli/issues/24
+# https://github.com/sindresorhus/recycle-bin (not sure whether this works in WSL)
+# https://stackoverflow.com/questions/74589411/accessing-the-windows-recycle-bin-in-wsl2
+# https://github.com/microsoft/vscode/issues/108731
+
+### Linux
+# Also see
+# https://specifications.freedesktop.org/trash-spec/latest/
+# https://wiki.archlinux.org/title/Trash_management
+# https://github.com/andreafrancia/trash-cli
+# https://github.com/PhrozenByte/rmtrash/ (depends on trash-cli)
+# https://github.com/robrwo/bashtrash
+# https://code.google.com/archive/p/rmv/
+# https://github.com/umlx5h/gtrash
