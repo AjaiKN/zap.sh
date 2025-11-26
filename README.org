@@ -1,5 +1,3 @@
-#+title: trash
-
 * trash: a bash CLI for putting files in the trash (WIP)
 ** Comparison table
 Based on [[https://github.com/umlx5h/gtrash/blob/main/doc/alternatives.md?plain=1][gtrash's comparison table]].
