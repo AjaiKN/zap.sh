@@ -3,6 +3,8 @@
 require "minitest/autorun"
 require "uri"
 
+ENV["PATH"] = File.realpath(__dir__ + "/bin") + ":" + ENV["PATH"]
+
 def strategy strat
 	ENV['TRASH_STRATEGY'] = strat
 end
