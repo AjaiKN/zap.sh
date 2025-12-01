@@ -36,8 +36,11 @@ def test_chars
 	ret += (1..31).map(&:chr).join('') # control characters
 	ret += '£€æü'
 	ret += "\x7F"
-	# NOTE: Linux has a max file length (lower than the max for Mac)
 	ret += '折り紙🕊é é﷽ᄀᄀᄀ각ᆨᆨ🇺🇸각नीநி﷽&ᄀᄀᄀ각ᆨᆨ🇺🇸각नीநி👩‍👩‍👦‍👦&👩‍👩‍👦‍👦&'
+	# NOTE: Linux has a max file length (lower than the max for Mac)
+	if RUBY_PLATFORM =~ /linux/
+		ret = ret[0...100]
+	end
 	ret
 end
 
@@ -103,6 +106,7 @@ class TestTrash < Minitest::Test
 
 	def test_trash_cli
 		ENV["PATH"] += ":/opt/homebrew/opt/trash-cli/bin" # for Mac, since trash-cli is Keg-only
+		skip "trash CLI not available" unless system "which trash-put"
 		strategy "trash_cli"
 		FileUtils.touch @filename
 		puts `trash -v -- '#{@filename}'`
