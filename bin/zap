@@ -54,7 +54,7 @@ Put each FILE in the trash. Currently supports macOS and Linux.
                            This option implies --verbose.
   -v, --verbose            Be more verbose.
   -s, --strategy=STRATEGY  Specify which trashing strategy to use.
-                           Can also be specified with the TRASH_STRATEGY environment variable, which this
+                           Can also be specified with the ZAP_STRATEGY environment variable, which this
                            option supersedes.
   -d, --dir                Does nothing. For compatibility with rm.
   -r, -R, --recursive      Does nothing. For compatibility with rm.
@@ -96,7 +96,7 @@ can_delete_file() {
 	# File must exist.
 	# (If it's a broken symlink, -e will return false, but -L will return true.)
 	if [ ! -e "$1" ] && [ ! -L "$file" ]; then
-		echo "trash: File '$file' does not exist" >&2
+		echo "zap: File '$file' does not exist" >&2
 		return 1
 	fi
 	# If we're the superuser, we can always delete.
@@ -107,7 +107,7 @@ can_delete_file() {
 	local dir
 	dir=$(mydirname "$1") || return 1
 	if [ ! -w "$dir" ] || [ ! -x "$dir" ]; then
-		echo "Cannot trash '$file' because we don't have write and execute permissions on its parent directory '$(mydirname "$file")'" >&2
+		echo "Cannot zap '$file' because we don't have write and execute permissions on its parent directory '$(mydirname "$file")'" >&2
 		return 1
 	fi
 }
@@ -123,7 +123,7 @@ is_writable_by_current_user() {
 	fi
 	# Check if writable.
 	if [ ! -w "$1" ]; then
-		echo "trash: The file '$file' is not writable by the current user. Use --force to override." >&2
+		echo "zap: The file '$file' is not writable by the current user. Use --force to override." >&2
 		return 1
 	fi
 }
@@ -341,7 +341,7 @@ while [[ $# -gt 0 ]]; do
 			;;
 		--interactive=*)
 			# message from GNU rm
-			echo "trash: ambiguous argument ‘$1’
+			echo "zap: ambiguous argument ‘$1’
 Valid arguments for ‘--interactive’ are:
   - ‘never’, ‘no’, ‘none’
   - ‘once’
@@ -350,7 +350,7 @@ Try '$0 --help' for more information."
 			exit 1
 			;;
 		--strategy|-s)
-			TRASH_STRATEGY="$2"
+			ZAP_STRATEGY="$2"
 			shift
 			shift
 			;;
@@ -360,7 +360,7 @@ Try '$0 --help' for more information."
 			set -- --strategy "$arg" "$@"
 			;;
 		--version) # necessary for man2help
-			echo "trash 0.1-pre"
+			echo "zap 0.1-pre"
 			exit
 			;;
 		--)
@@ -401,7 +401,7 @@ for file in "$@"; do
 		# permissions on the file, then we won't be able to move it. See the
 		# can_move_to() function above.
 		file=$(get_abs_filename "$file")
-		[ -z "$verbose" ] || echo "Will trash $file"
+		[ -z "$verbose" ] || echo "Will zap $file"
 		files+=("$file")
 	fi
 done
@@ -445,8 +445,8 @@ choose_strategy() {
 	return
 }
 
-TRASH_STRATEGY=${TRASH_STRATEGY:-$(choose_strategy)}
-[ -n "$verbose" ] && echo "Using strategy: $TRASH_STRATEGY" >&2
+ZAP_STRATEGY=${ZAP_STRATEGY:-$(choose_strategy)}
+[ -n "$verbose" ] && echo "Using strategy: $ZAP_STRATEGY" >&2
 
 ## Execute
 
@@ -473,7 +473,7 @@ if [ -n "$force" ]; then
 	set +euo pipefail
 fi
 
-case "$TRASH_STRATEGY" in
+case "$ZAP_STRATEGY" in
 	freedesktop)
 		# https://specifications.freedesktop.org/trash-spec/latest/
 		set -o noclobber # don't overwrite file when using >
@@ -604,7 +604,7 @@ case "$TRASH_STRATEGY" in
 		;;
 
 	*)
-		echo "Unrecognized strategy: $TRASH_STRATEGY" >&2
+		echo "Unrecognized strategy: $ZAP_STRATEGY" >&2
 		exit 1
 		;;
 esac

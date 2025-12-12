@@ -6,7 +6,7 @@ require "uri"
 ENV["PATH"] = File.realpath(__dir__ + "/bin") + ":" + ENV["PATH"]
 
 def strategy strat
-	ENV['TRASH_STRATEGY'] = strat
+	ENV['ZAP_STRATEGY'] = strat
 end
 
 def xdg_data_home
@@ -49,7 +49,7 @@ end
 TEST_CHARS = test_chars
 # TEST_CHARS = ''
 
-class TestTrash < Minitest::Test
+class TestZap < Minitest::Test
 	## Replacement for Dir.mktmpdir where the temp dir is always part of the home directory.
 	def mktmpdir_home(&block)
 		dir = nil
@@ -84,7 +84,7 @@ class TestTrash < Minitest::Test
 
 	def test_nonexistent_strategy_fails
 		strategy "nonexistent_strategy"
-		puts `trash -v -- '#{@filename}'`
+		puts `zap -v -- '#{@filename}'`
 		refute $?.success?
 		assert File.exist? @filename
 	end
@@ -92,7 +92,7 @@ class TestTrash < Minitest::Test
 	def test_freedesktop
 		strategy "freedesktop"
 		FileUtils.touch @filename
-		puts `trash -v -- '#{@filename}'`
+		puts `zap -v -- '#{@filename}'`
 		assert $?.success?
 		refute File.exist? @filename
 		assert File.exist? "#{xdg_data_home}/Trash/files/#{@filename}"
@@ -111,7 +111,7 @@ class TestTrash < Minitest::Test
 		skip "trash CLI not available" unless system "which trash-put"
 		strategy "trash_cli"
 		FileUtils.touch @filename
-		puts `trash -v -- '#{@filename}'`
+		puts `zap -v -- '#{@filename}'`
 		assert $?.success?
 		refute File.exist? @filename
 		assert File.exist? "#{xdg_data_home}/Trash/files/#{@filename}"
@@ -129,7 +129,7 @@ class TestTrash < Minitest::Test
 		skip "gio CLI not available" unless system "which gio"
 		strategy "gio"
 		FileUtils.touch @filename
-		puts `trash -v -- '#{@filename}'`
+		puts `zap -v -- '#{@filename}'`
 		assert $?.success?
 		refute File.exist? @filename
 		assert File.exist? "#{xdg_data_home}/Trash/files/#{@filename}"
@@ -147,7 +147,7 @@ class TestTrash < Minitest::Test
 		skip "not on mac" unless `uname -s`.chomp == 'Darwin'
 		strategy "macos_trash_command"
 		FileUtils.touch @filename
-		puts `trash -v -- '#{@filename}'`
+		puts `zap -v -- '#{@filename}'`
 		assert $?.success?
 		refute File.exist? @filename
 		assert File.exist? "#{Dir.home}/.Trash/#{@filename}"
@@ -158,7 +158,7 @@ class TestTrash < Minitest::Test
 		skip "not on mac" unless `uname -s`.chomp == 'Darwin'
 		strategy "macos_applescript"
 		FileUtils.touch @filename
-		puts `trash -v -- '#{@filename}'`
+		puts `zap -v -- '#{@filename}'`
 		assert $?.success?
 		refute File.exist? @filename
 		assert File.exist? "#{Dir.home}/.Trash/#{@filename}"
@@ -171,7 +171,7 @@ class TestTrash < Minitest::Test
 		skip "not on mac" unless `uname -s`.chomp == 'Darwin'
 		strategy "macos_mv"
 		FileUtils.touch @filename
-		puts `trash -v -- '#{@filename}'`
+		puts `zap -v -- '#{@filename}'`
 		assert $?.success?
 		refute File.exist? @filename
 		assert File.exist? "#{Dir.home}/.Trash/#{@filename}"

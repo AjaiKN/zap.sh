@@ -1,4 +1,4 @@
-#compdef trash
+#compdef zap
 #description Move a file to the trash
 
 local -a strategies

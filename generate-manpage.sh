@@ -13,7 +13,7 @@ mkdir -p ./man/man1 || exit 1
 PATH="$PWD/bin:$PATH"
 export PATH
 
-commands=(trash)
+commands=(zap)
 for c in "${commands[@]}"; do
 	outfile=./man/man1/"$c.1"
 	help2man --no-info --output="$outfile" "$c"
