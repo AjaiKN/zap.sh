@@ -22,7 +22,7 @@ git add bin/zap
 git add man/man1/zap.1
 
 bin/zap -f zap.tar.gz
-tar caf zap.tar.gz -C .. zap/{bin/zap,man/man1/zap.1,_zap,zap.plugin.zsh,LICENSE}
+tar caf zap.tar.gz -C .. zap/{bin/zap,man/man1/zap.1,completions/zsh/_zap,zap.plugin.zsh,LICENSE}
 
 git commit -m "release: v$version"
 git tag -s "v$version" -em "v$version"
