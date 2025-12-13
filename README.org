@@ -1,4 +1,12 @@
 * zap.sh: a bash CLI for putting files in the trash (WIP)
+** Installation
+*** With homebrew
+#+begin_src sh
+brew install ajaikn/tap/zap.sh
+#+end_src
+*** Manual
+- Copy =bin/zap= into your PATH
+- Copy =completions/zsh/_zap= into your zsh completions directory, or source =zap.plugin.zsh=
 ** Comparison table
 Based on [[https://github.com/umlx5h/gtrash/blob/main/doc/alternatives.md?plain=1][gtrash's comparison table]].
 
