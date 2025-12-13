@@ -21,11 +21,8 @@ git add bin/zap
 ./generate-manpage.sh
 git add man/man1/zap.1
 
-(
-	cd ..
-	zap/bin/zap -f zap/zap.tar.gz
-	tar caf zap/zap.tar.gz zap/{bin/zap,man/man1/zap.1,_zap,zap.plugin.sh}
-)
+bin/zap -f zap.tar.gz
+tar caf zap.tar.gz -C .. zap/{bin/zap,man/man1/zap.1,_zap,zap.plugin.zsh}
 
 git commit -m "release: v$version"
 git tag -s "v$version" -em "v$version"
