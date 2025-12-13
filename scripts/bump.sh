@@ -31,4 +31,4 @@ git tag -s "v$version" -em "v$version"
 git push origin main "v$version"
 gh release create "v$version" --notes-from-tag zap.tar.gz
 
-# brew bump --tap ajaikn/homebrew-tap --no-fork --open-pr zap.sh
+brew bump --tap ajaikn/homebrew-tap --no-fork --open-pr zap.sh
