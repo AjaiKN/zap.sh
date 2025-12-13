@@ -3,7 +3,7 @@
 require "minitest/autorun"
 require "uri"
 
-ENV["PATH"] = File.realpath(__dir__ + "/bin") + ":" + ENV["PATH"]
+ENV["PATH"] = File.realpath(__dir__ + "/../bin") + ":" + ENV["PATH"]
 
 def strategy strat
 	ENV['ZAP_STRATEGY'] = strat

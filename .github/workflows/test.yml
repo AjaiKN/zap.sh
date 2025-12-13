@@ -15,4 +15,4 @@ jobs:
           ruby-version: 3.4.7
 
       - name: Run tests
-        run: ./test.rb
+        run: test/test.rb
