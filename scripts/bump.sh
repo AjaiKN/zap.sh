@@ -23,12 +23,9 @@ git add bin/zap
 scripts/generate-manpage.sh
 git add man/man1/zap.1
 
-bin/zap -f zap.tar.gz
-tar -caf zap.tar.gz --format=pax -C .. zap/{bin/zap,man/man1/zap.1,completions/zsh/_zap,zap.plugin.zsh,LICENSE,README.org}
-
 git commit -m "release: v$version"
 git tag -s "v$version" -em "v$version"
 git push origin main "v$version"
-gh release create "v$version" --notes-from-tag zap.tar.gz
+gh release create "v$version" --notes-from-tag
 
 brew bump --tap ajaikn/homebrew-tap --no-fork --open-pr zap.sh
