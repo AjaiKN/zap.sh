@@ -23,6 +23,9 @@ git add bin/zap
 scripts/generate-manpage.sh
 git add man/man1/zap.1
 
+scripts/generate-readme-usage
+git add README.org
+
 git commit -m "release: v$version"
 git tag -s "v$version" -em "v$version"
 git push origin main "v$version"

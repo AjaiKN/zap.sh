@@ -7,6 +7,39 @@ brew install ajaikn/tap/zap.sh
 *** Manual
 - Copy =bin/zap= into your PATH
 - Copy =completions/zsh/_zap= into your zsh completions directory, or source =zap.plugin.zsh=
+** Usage
+#+begin_src
+Usage: zap [OPTION]... [--] FILE...
+Put each FILE in the trash. Currently supports macOS and Linux.
+
+  -h, --help               Show this usage message.
+  -f, --force              Override non-writable files, and ignore nonexistent or otherwise untrashable files.
+                           If any of the files are owned by the current user but don't have write permissions,
+                           delete them anyway. If any of the files are nonexistent, or if we can't trash them
+                           (because their directories aren't writable and executable), ignore them and still
+                           trash everything else. (Otherwise, this command will refuse to do anything if any
+                           of the arguments are untrashable.)
+  -n, --dry-run            Don't actually trash anything; just print what this command *would* do.
+                           This option implies --verbose.
+  -v, --verbose            Be more verbose.
+  -s, --strategy=STRATEGY  Specify which trashing strategy to use.
+                           Can also be specified with the ZAP_STRATEGY environment variable, which this
+                           option supersedes.
+  -d, --dir                Does nothing. For compatibility with rm.
+  -r, -R, --recursive      Does nothing. For compatibility with rm.
+
+*Available strategies*
+  freedesktop              (default on Linux) Use the freedesktop.org Trash Specification:
+                           https://specifications.freedesktop.org/trash-spec/1.0/
+  macos_trash_command      (default on macOS >=14.0) Use the built-in macOS /usr/bin/trash command
+  macos_applescript        (default on macOS <14.0) Use AppleScript
+  macos_mv                 Use mv to move to ~/.Trash/
+  gio                      Use the 'gio trash' command
+  kioclient                Use the 'kioclient move FILE... trash:/' command
+  trash_cli                Use trash-put from trash-cli: https://github.com/andreafrancia/trash-cli
+  dangerous_rm             Use rm
+  dangerous_shred          Use GNU shred
+#+end_src
 ** Comparison table
 Based on [[https://github.com/umlx5h/gtrash/blob/main/doc/alternatives.md?plain=1][gtrash's comparison table]].
 

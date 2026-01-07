@@ -1,0 +1,14 @@
+#!/usr/bin/env ruby
+
+require 'fileutils'
+
+FileUtils.cd __dir__
+
+str = File.read '../README.org'
+
+replacement = `../bin/zap --help`.sub(/Usage: .*\/zap/, 'Usage: zap')
+str.sub!(/(\* Usage\n\#\+begin_src[^\r\n]*\n).*?(^\#\+end_src)$/m) do |match|
+	$1 + replacement + $2
+end
+
+File.write '../README.org', str
