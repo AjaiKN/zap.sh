@@ -5,8 +5,8 @@
 brew install ajaikn/tap/zap.sh
 #+end_src
 *** Manual
-- Copy =bin/zap= into your PATH
-- Copy =completions/zsh/_zap= into your zsh completions directory, or source =zap.plugin.zsh=
+- Copy or symlink =bin/zap= into a directory on your PATH.
+- To install zsh completions /(optional)/: copy =completions/zsh/_zap= into your zsh completions directory, or source =zap.plugin.zsh=.
 ** Usage
 #+begin_src
 Usage: zap [OPTION]... [--] FILE...
