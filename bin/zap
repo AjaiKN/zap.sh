@@ -253,7 +253,7 @@ get_top_freedesktop_trashdir() {
 				# file, if this directory does not exist for the current user, the
 				# implementation MUST immediately create it, without any warnings or
 				# delays for the user.
-				mkdir -p "$topdir/.Trash/$UID"/{files,info} 2>/dev/null
+				{ [ -n "$dry_run" ] || mkdir -p "$topdir/.Trash/$UID"/{files,info} >/dev/null 2>&1; }
 		then
 			printf '%s\n' "$topdir/.Trash/$UID"
 			return
@@ -262,7 +262,7 @@ get_top_freedesktop_trashdir() {
 		# (2) If an $topdir/.Trash directory is absent, an $topdir/.Trash-$UID
 		# directory is to be used as the user’s trash directory for this
 		# device/partition. $UID is the user’s numeric identifier.
-		if mkdir -p "$topdir/.Trash-$UID"/{files,info} 2>/dev/null
+		if [ -n "$dry_run" ] || mkdir -p "$topdir/.Trash-$UID"/{files,info} >/dev/null 2>&1
 		then
 			printf '%s\n' "$topdir/.Trash-$UID"
 			return
@@ -277,7 +277,14 @@ get_freedesktop_trashdir() {
 	ret=$(get_top_freedesktop_trashdir "$1") ||
 		ret="${XDG_DATA_HOME:-$HOME/.local/share}/Trash"
 
-	mkdir -p "$ret"/{files,info}
+	[ -z "$verbose" ] || echo mkdir -p "'$ret"/{files,info}"'" '>&2' >&2
+	[ -n "$dry_run" ] || mkdir -p "$ret"/{files,info} >&2
+	# If chflags is available (BSD/macOS), make sure trash is hidden. This should
+	# hopefuly make it hidden on Windows on shared network SMB drives.
+	if command -v chflags >/dev/null 2>&1; then
+		[ -z "$verbose" ] || echo chflags hidden "'$ret'" '>/dev/null' '2>&1' >&2
+		[ -n "$dry_run" ] || chflags hidden "$ret" >/dev/null 2>&1 || :
+	fi
 
 	printf '%s\n' "$ret"
 }
@@ -494,8 +501,8 @@ ZAP_STRATEGY=${ZAP_STRATEGY:-$(choose_strategy)}
 
 # check that none of the arguments are sub/superdirectories of the trash directory
 check_not_trash_sub_or_super_directory() {
-	if [ -z "$force" ] && command -v realpath >/dev/null 2>&1; then
-		trash_realpath="$(realpath "$trash")" || exit 2
+	if [ -z "$force" ] && command -v realpath >/dev/null 2>&1 && { [ -z "$dry_run" ] || [ -d "$trash" ]; }; then
+		trash_realpath="$(realpath "$trash")" || { [ -n "$dry_run" ] && return || exit 2; }
 		for file in "$@"; do
 			if [ ! -L "$file" ]; then
 				file_realpath="$(realpath "$file")" || exit 2
