@@ -539,8 +539,8 @@ case "$ZAP_STRATEGY" in
 					dest_filename="$(mybasename "$file") $thedate $RANDOM$RANDOM"
 				fi
 			done
-			[ -z "$verbose" ] || echo mv -n "'$file'" "'$trash/files/$dest_filename'" >&2
-			[ -n "$dry_run" ] || mv -n "$file" "$trash/files/$dest_filename"
+			[ -z "$verbose" ] || echo mv -i "'$file'" "'$trash/files/$dest_filename'" '</dev/null' >&2
+			[ -n "$dry_run" ] || mv -i "$file" "$trash/files/$dest_filename" </dev/null
 		done
 		;;
 
@@ -577,8 +577,8 @@ case "$ZAP_STRATEGY" in
 			while [ -e "$trash/$dest_filename" ] || [ -L "$trash/$dest_filename" ]; do
 				dest_filename="$dest_filename $(date +"%Y-%m-%dT%H:%M:%S")"
 			done
-			[ -z "$verbose" ] || echo mv -n "'$file'" "'$trash/$dest_filename'"
-			[ -n "$dry_run" ] || mv -n "$file" "$trash/$dest_filename"
+			[ -z "$verbose" ] || echo mv -i "'$file'" "'$trash/$dest_filename'" '</dev/null'
+			[ -n "$dry_run" ] || mv -i "$file" "$trash/$dest_filename" </dev/null
 		done
 		;;
 
