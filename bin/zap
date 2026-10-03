@@ -59,10 +59,12 @@ Put each FILE in the trash. Currently supports macOS and Linux.
                            Can also be specified with the ZAP_STRATEGY environment variable, which this
                            option supersedes.
   -l, --list               List trashed files (oldest first) as DELETIONDATE<TAB>ORIGINALPATH.
-                           Only supported by the freedesktop strategy.
       --restore            Restore each FILE (given by its original path) from the trash. If a path was
                            trashed more than once, restore the most recent one. Refuses to overwrite.
-                           Only supported by the freedesktop strategy.
+                           --list and --restore work regardless of strategy. They see freedesktop.org
+                           trash directories, plus items zap trashed with the macOS strategies (recorded
+                           in \$XDG_DATA_HOME/zap/info). Items trashed with other tools on macOS aren't
+                           seen.
   -d, --dir                Does nothing. For compatibility with rm.
   -r, -R, --recursive      Does nothing. For compatibility with rm.
 
