@@ -80,6 +80,24 @@ class TestZap < Minitest::Test
 		end
 	end
 
+	## Point HOME at a fresh temp dir (with an empty .Trash) for the duration of
+	## the block, with XDG_DATA_HOME unset. Yields the temp HOME.
+	def with_fake_home
+		old_home, old_xdg = ENV['HOME'], ENV['XDG_DATA_HOME']
+		mktmpdir_home do |home|
+			FileUtils.mkdir "#{home}/.Trash"
+			ENV['HOME'] = home
+			ENV.delete 'XDG_DATA_HOME'
+			yield home
+		ensure
+			ENV['HOME'], ENV['XDG_DATA_HOME'] = old_home, old_xdg
+		end
+	end
+
+	def zap_records(home)
+		Dir.glob("#{home}/.local/share/zap/info/*.trashinfo")
+	end
+
 	def setup
 		puts; puts
 		@dir = mktmpdir_home
@@ -297,5 +315,100 @@ class TestZap < Minitest::Test
 			system "zap", "--restore", "--", "never-trashed", out: File::NULL, err: File::NULL
 			assert_equal 1, $?.exitstatus
 		end
+	end
+
+	def test_macos_mv_record_and_restore
+		strategy "macos_mv"
+		with_fake_home do |home|
+			system "zap", "--", @filename, out: File::NULL, exception: true
+			refute File.exist? @filename
+			assert_equal 1, zap_records(home).length
+			info = File.read(zap_records(home).first)
+			assert_match(/^X-Zap-Strategy=macos_mv$/, info)
+			assert_match(/^X-Zap-Inode=\d+$/, info)
+			system "zap", "--restore", "--", @filename, out: File::NULL, exception: true
+			assert_equal @contents, File.binread(@filename)
+			assert_empty zap_records(home)
+			assert_empty Dir.children("#{home}/.Trash")
+		end
+	end
+
+	def test_macos_mv_restore_after_rename_in_trash
+		strategy "macos_mv"
+		with_fake_home do |home|
+			File.write "a.txt", "a"
+			system "zap", "--", "a.txt", out: File::NULL, exception: true
+			# Simulate Finder renaming the item.
+			File.rename "#{home}/.Trash/a.txt", "#{home}/.Trash/a 2.txt"
+			system "zap", "--restore", "--", "a.txt", out: File::NULL, exception: true
+			assert_equal "a", File.read("a.txt")
+			assert_empty Dir.children("#{home}/.Trash")
+		end
+	end
+
+	def test_macos_mv_name_clash
+		strategy "macos_mv"
+		with_fake_home do |home|
+			File.write "a.txt", "older"
+			system "zap", "--", "a.txt", out: File::NULL, exception: true
+			sleep 1.1 # DeletionDate has one-second resolution
+			File.write "a.txt", "newer"
+			system "zap", "--", "a.txt", out: File::NULL, exception: true
+			assert_equal 2, Dir.children("#{home}/.Trash").length
+			system "zap", "--restore", "--", "a.txt", out: File::NULL, exception: true
+			assert_equal "newer", File.read("a.txt")
+			File.delete "a.txt"
+			system "zap", "--restore", "--", "a.txt", out: File::NULL, exception: true
+			assert_equal "older", File.read("a.txt")
+		end
+	end
+
+	def test_macos_mv_stale_record
+		strategy "macos_mv"
+		with_fake_home do |home|
+			File.write "a.txt", "a"
+			system "zap", "--", "a.txt", out: File::NULL, exception: true
+			# Simulate emptying the trash.
+			File.delete "#{home}/.Trash/a.txt"
+			refute_match(/a\.txt/, `zap --list`)
+			system "zap", "--restore", "--", "a.txt", out: File::NULL, err: File::NULL
+			refute $?.success?
+			refute File.exist? "a.txt"
+		end
+	end
+
+	def restore_round_trip_with(strat)
+		strategy strat
+		with_isolated_trash do
+			File.write "a.txt", "a"
+			system "zap", "--", "a.txt", out: File::NULL, err: File::NULL, exception: true
+			refute File.exist? "a.txt"
+			system "zap", "--restore", "--", "a.txt", out: File::NULL, exception: true
+			assert_equal "a", File.read("a.txt")
+		end
+	end
+
+	def test_trash_cli_restore
+		skip "trash CLI not available" unless system "which trash-put", out: File::NULL, err: File::NULL
+		restore_round_trip_with "trash_cli"
+	end
+
+	def test_gio_restore
+		skip "gio CLI not available" unless system "which gio", out: File::NULL, err: File::NULL
+		restore_round_trip_with "gio"
+	end
+
+	def macos_trash_readable?
+		`uname -s`.chomp == 'Darwin' && (Dir.children("#{Dir.home}/.Trash") rescue false)
+	end
+
+	def test_macos_trash_command_restore
+		skip "not on mac, or ~/.Trash not readable" unless macos_trash_readable? && File.executable?("/usr/bin/trash")
+		restore_round_trip_with "macos_trash_command"
+	end
+
+	def test_macos_applescript_restore
+		skip "not on mac, or ~/.Trash not readable" unless macos_trash_readable?
+		restore_round_trip_with "macos_applescript"
 	end
 end
