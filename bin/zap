@@ -86,14 +86,17 @@ EOF
 
 urlencode_help() {
 	# https://askubuntu.com/a/712206
-	local LC_ALL=C c
+	local LC_ALL=C c n
 	while IFS= read -r -n1 -d '' c
 	do
 		if [[ $c = [a-zA-Z0-9/.~_-] ]]
 		then
 			printf %s "$c"
 		else
-			printf %%%02X "'$c"
+			# (Some versions of bash, e.g. macOS's /bin/bash 3.2, treat bytes >= 0x80
+			# as negative here, so mask to a single byte.)
+			printf -v n %d "'$c"
+			printf %%%02X $((n & 255))
 		fi
 	done
 }
