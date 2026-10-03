@@ -94,6 +94,24 @@ class TestZap < Minitest::Test
 		end
 	end
 
+	## Mount a fresh tmpfs (a different filesystem from the home trash, with no
+	## usable top-level trash directory) and yield a directory in it owned by the
+	## current user. Skips the test if passwordless sudo isn't available.
+	def with_tmpfs
+		skip "running as root" if Process.uid == 0
+		skip "needs passwordless sudo to mount a tmpfs" unless system "sudo", "-n", "true", out: File::NULL, err: File::NULL
+		mktmpdir_home do |mnt|
+			system "sudo", "-n", "mount", "-t", "tmpfs", "-o", "mode=755", "tmpfs", mnt, exception: true
+			begin
+				system "sudo", "-n", "install", "-d", "-o", Process.uid.to_s, "#{mnt}/w", exception: true
+				yield "#{mnt}/w"
+			ensure
+				system "sudo", "-n", "chmod", "-R", "u+rwx", mnt
+				system "sudo", "-n", "umount", mnt, exception: true
+			end
+		end
+	end
+
 	def zap_records(home)
 		Dir.glob("#{home}/.local/share/zap/info/*.trashinfo")
 	end
@@ -478,6 +496,62 @@ class TestZap < Minitest::Test
 			assert_equal 1, $?.exitstatus
 			refute File.exist? "good"
 			assert File.exist? "#{trash}/files/inside"
+		end
+	end
+
+	def assert_cross_fs_refused(trash, dir, flags: [])
+		File.write "#{dir}/good", "g"
+		system "zap", *flags, "--", "#{dir}/good", "#{dir}/d", out: File::NULL, err: File::NULL
+		assert_equal 1, $?.exitstatus
+		assert File.exist? "#{dir}/d/inner"
+		refute Dir.exist?("#{trash}/files/d"), "partial copy left in trash"
+		refute File.exist?("#{trash}/info/d.trashinfo")
+		if flags.include? "-f"
+			refute File.exist? "#{dir}/good"
+		else
+			assert File.exist? "#{dir}/good"
+		end
+	end
+
+	def test_cross_fs_unreadable_file_in_directory
+		strategy "freedesktop"
+		[[], ["-f"]].each do |flags|
+			with_isolated_trash do |trash|
+				with_tmpfs do |dir|
+					FileUtils.mkdir "#{dir}/d"
+					File.write "#{dir}/d/inner", "i"
+					FileUtils.chmod 0o000, "#{dir}/d/inner"
+					assert_cross_fs_refused trash, dir, flags: flags
+				end
+			end
+		end
+	end
+
+	def test_cross_fs_read_only_subdirectory
+		strategy "freedesktop"
+		[[], ["-f"]].each do |flags|
+			with_isolated_trash do |trash|
+				with_tmpfs do |dir|
+					FileUtils.mkdir_p "#{dir}/d/sub"
+					File.write "#{dir}/d/inner", "i"
+					File.write "#{dir}/d/sub/x", "x"
+					FileUtils.chmod 0o555, "#{dir}/d/sub"
+					assert_cross_fs_refused trash, dir, flags: flags
+				end
+			end
+		end
+	end
+
+	def test_cross_fs_directory_ok
+		strategy "freedesktop"
+		with_isolated_trash do |trash|
+			with_tmpfs do |dir|
+				FileUtils.mkdir_p "#{dir}/d/sub"
+				File.write "#{dir}/d/sub/x", "x"
+				system "zap", "--", "#{dir}/d", out: File::NULL, err: File::NULL, exception: true
+				refute Dir.exist? "#{dir}/d"
+				assert_equal "x", File.read("#{trash}/files/d/sub/x")
+			end
 		end
 	end
 end
