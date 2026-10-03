@@ -39,12 +39,14 @@ option supersedes.
 .TP
 \fB\-l\fR, \fB\-\-list\fR
 List trashed files (oldest first) as DELETIONDATE<TAB>ORIGINALPATH.
-Only supported by the freedesktop strategy.
 .TP
 \fB\-\-restore\fR
 Restore each FILE (given by its original path) from the trash. If a path was
 trashed more than once, restore the most recent one. Refuses to overwrite.
-Only supported by the freedesktop strategy.
+\fB\-\-list\fR and \fB\-\-restore\fR work regardless of strategy. They see freedesktop.org
+trash directories, plus items zap trashed with the macOS strategies (recorded
+in \fI\,$XDG_DATA_HOME/zap/info\/\fP). Items trashed with other tools on macOS aren't
+seen.
 .TP
 \fB\-d\fR, \fB\-\-dir\fR
 Does nothing. For compatibility with rm.
