@@ -305,6 +305,34 @@ get_freedesktop_trashdir() {
 	printf '%s\n' "$ret"
 }
 
+# write_trashinfo TRASHDIR BASENAME DATE CONTENTS
+# Writes CONTENTS to TRASHDIR/info/NAME.trashinfo, where NAME is BASENAME
+# (possibly with DATE and random numbers appended) such that neither
+# TRASHDIR/info/NAME.trashinfo nor TRASHDIR/files/NAME already exists. Never
+# overwrites anything. Prints NAME followed by a "/" (so that command
+# substitution doesn't strip trailing newlines from NAME).
+write_trashinfo() {
+	local trash="$1" base="$2" thedate="$3" contents="$4" name
+	set -o noclobber # don't overwrite file when using >
+	name=$base
+	if [ -e "$trash/info/$name.trashinfo" ] || [ -L "$trash/info/$name.trashinfo" ] || [ -e "$trash/files/$name" ] || [ -L "$trash/files/$name" ]; then
+		name="$base $thedate"
+	fi
+	while [ -e "$trash/info/$name.trashinfo" ] || [ -L "$trash/info/$name.trashinfo" ] || [ -e "$trash/files/$name" ] || [ -L "$trash/files/$name" ]; do
+		name="$base $thedate $RANDOM"
+	done
+	while : ; do
+		[ -z "$verbose" ] || printf 'Writing to "%s":\n%s\n' "$trash/info/$name.trashinfo" "$(printf '%s\n' "$contents" | sed 's/^/\t/')" >&2
+		if [ -n "$dry_run" ] || printf '%s\n' "$contents" >"$trash/info/$name.trashinfo"; then
+			break
+		else
+			[ -z "$verbose" ] || printf 'Failed to write! Trying a different name. ' >&2
+			name="$base $thedate $RANDOM$RANDOM"
+		fi
+	done
+	printf '%s/' "$name"
+}
+
 list_mountpoints() {
 	df -P "$@" | {
 		IFS= read -r _header_line
@@ -659,7 +687,6 @@ fi
 case "$ZAP_STRATEGY" in
 	(freedesktop)
 		# https://specifications.freedesktop.org/trash-spec/latest/
-		set -o noclobber # don't overwrite file when using >
 		for file in "$@"; do
 			trash=$(get_freedesktop_trashdir "$file")
 			check_not_trash_sub_or_super_directory "$file"
@@ -670,22 +697,9 @@ case "$ZAP_STRATEGY" in
 				continue
 			fi
 			thedate=$(date +"%Y-%m-%dT%H:%M:%S")
-			dest_filename=$(mybasename "$file")
-			if [ -e "$trash/info/$dest_filename.trashinfo" ] || [ -L "$trash/info/$dest_filename.trashinfo" ] || [ -e "$trash/files/$dest_filename" ] || [ -L "$trash/files/$dest_filename" ]; then
-				dest_filename="$(mybasename "$file") $thedate"
-			fi
-			while [ -e "$trash/info/$dest_filename.trashinfo" ] || [ -L "$trash/info/$dest_filename.trashinfo" ] || [ -e "$trash/files/$dest_filename" ] || [ -L "$trash/files/$dest_filename" ]; do
-				dest_filename="$(mybasename "$file") $thedate $RANDOM"
-			done
-			while : ; do
-				[ -z "$verbose" ] || printf 'Writing to "%s":\n\t[Trash Info]\n\tPath=%s\n\tDeletionDate=%s\n' "$trash/info/$dest_filename.trashinfo" "$(urlencode "$file")" "$thedate" >&2
-				if [ -n "$dry_run" ] || printf '[Trash Info]\nPath=%s\nDeletionDate=%s\n' "$(urlencode "$file")" "$thedate" >"$trash/info/$dest_filename.trashinfo"; then
-					break
-				else
-					[ -z "$verbose" ] || printf 'Failed to write! Trying a different name. ' >&2
-					dest_filename="$(mybasename "$file") $thedate $RANDOM$RANDOM"
-				fi
-			done
+			dest_filename=$(write_trashinfo "$trash" "$(mybasename "$file")" "$thedate" \
+				"$(printf '[Trash Info]\nPath=%s\nDeletionDate=%s' "$(urlencode "$file")" "$thedate")")
+			dest_filename=${dest_filename%/}
 			[ -z "$verbose" ] || echo mv -i "'$file'" "'$trash/files/$dest_filename'" '</dev/null' >&2
 			if [ -z "$dry_run" ] && ! mv -i "$file" "$trash/files/$dest_filename" </dev/null; then
 				command rm -f -- "$trash/info/$dest_filename.trashinfo"
