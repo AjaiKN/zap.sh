@@ -748,16 +748,31 @@ if [ "$action" = list ]; then
 	exit
 fi
 
-restore_one() {
-	local target best_info='' best_location='' best_date=''
+# is_in_array STRING ELEMENT...
+is_in_array() {
+	local needle="$1" x
+	shift
+	for x in "$@"; do
+		[ "$x" != "$needle" ] || return 0
+	done
+	return 1
+}
+
+# find_restore_candidate FILE
+# Finds the most recently trashed item whose original path is FILE, and checks
+# that it can be moved back. Sets $restore_target, $restore_location and
+# $restore_info, or prints a message and fails.
+find_restore_candidate() {
+	local best_info='' best_location='' best_date='' parent
+	restore_location=
 	if [[ $1 == *$'\n' ]]; then
 		echo "zap: Can't restore '$1': file names ending in a newline aren't supported" >&2
 		return 1
 	fi
-	target=$(get_abs_filename "$1") || return 1
+	restore_target=$(get_abs_filename "$1") || return 1
 	# shellcheck disable=SC2329 # called by each_trash_entry
 	consider_entry() {
-		if [ "$entry_path" = "$target" ] && ! [[ $entry_date < $best_date ]]; then
+		if [ "$entry_path" = "$restore_target" ] && ! [[ $entry_date < $best_date ]]; then
 			best_info=$entry_info
 			best_location=$entry_location
 			best_date=$entry_date
@@ -766,19 +781,25 @@ restore_one() {
 	each_trash_entry consider_entry
 
 	if [ -z "$best_info" ]; then
-		echo "zap: '$target' was not found in the trash" >&2
+		echo "zap: '$restore_target' was not found in the trash" >&2
 		return 1
 	fi
-	if [ -e "$target" ] || [ -L "$target" ]; then
-		echo "zap: Can't restore '$target': it already exists" >&2
+	if [ -e "$restore_target" ] || [ -L "$restore_target" ]; then
+		echo "zap: Can't restore '$restore_target': it already exists" >&2
 		return 1
 	fi
-	[ -z "$verbose" ] || echo mv -i "'$best_location'" "'$target'" '</dev/null' >&2
-	if [ -z "$dry_run" ]; then
-		mv -i "$best_location" "$target" </dev/null || return 1
-		command rm -f -- "$best_info"
+	parent=$(mydirname "$restore_target") || return 1
+	if [ "$EUID" -ne 0 ] && { [ ! -w "$parent" ] || [ ! -x "$parent" ]; }; then
+		echo "zap: Can't restore '$restore_target': we don't have write and execute permissions on '$parent'" >&2
+		return 1
 	fi
-	printf '%s\n' "$target"
+	if [ -d "$best_location" ] && [ ! -L "$best_location" ] && [ "$EUID" -ne 0 ] && [ ! -w "$best_location" ]; then
+		echo "zap: Can't restore '$restore_target': moving a directory requires write permission on it ('$best_location')" >&2
+		return 1
+	fi
+	can_move_to "$parent" "$best_location" || return 1
+	restore_location=$best_location
+	restore_info=$best_info
 }
 
 if [ "$action" = restore ]; then
@@ -786,11 +807,36 @@ if [ "$action" = restore ]; then
 		echo "zap: --restore requires at least one FILE" >&2
 		exit 2
 	fi
+	# Check every argument before restoring anything.
+	targets=() locations=() infos=()
 	for file in "$@"; do
-		if ! restore_one "$file"; then
-			[ -n "$force" ] || exit 1
-			failed=1
+		if find_restore_candidate "$file" && is_in_array "$restore_target" "${targets[@]+"${targets[@]}"}"; then
+			echo "zap: '$restore_target' was given more than once" >&2
+		elif [ -n "$restore_location" ]; then
+			targets+=("$restore_target")
+			locations+=("$restore_location")
+			infos+=("$restore_info")
+			continue
 		fi
+		[ -n "$force" ] || exit 1
+		failed=1
+	done
+	i=0
+	while [ "$i" -lt "${#targets[@]}" ]; do
+		[ -z "$verbose" ] || echo mv -i "'${locations[$i]}'" "'${targets[$i]}'" '</dev/null' >&2
+		if [ -z "$dry_run" ]; then
+			if mv -i "${locations[$i]}" "${targets[$i]}" </dev/null; then
+				command rm -f -- "${infos[$i]}"
+			else
+				echo "zap: Failed to restore '${targets[$i]}'" >&2
+				[ -n "$force" ] || exit 1
+				failed=1
+				i=$((i + 1))
+				continue
+			fi
+		fi
+		printf '%s\n' "${targets[$i]}"
+		i=$((i + 1))
 	done
 	[ -z "$failed" ] || exit 1
 	exit
