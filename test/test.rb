@@ -574,4 +574,44 @@ class TestZap < Minitest::Test
 			end
 		end
 	end
+
+	def test_restore_fail_fast
+		strategy "freedesktop"
+		with_isolated_trash do
+			File.write "a.txt", "a"
+			system "zap", "--", "a.txt", out: File::NULL, exception: true
+			system "zap", "--restore", "--", "a.txt", "never-trashed", out: File::NULL, err: File::NULL
+			assert_equal 1, $?.exitstatus
+			refute File.exist? "a.txt"
+
+			system "zap", "--restore", "--", "a.txt", "a.txt", out: File::NULL, err: File::NULL
+			assert_equal 1, $?.exitstatus
+			refute File.exist? "a.txt"
+
+			system "zap", "-f", "--restore", "--", "a.txt", "never-trashed", out: File::NULL, err: File::NULL
+			assert_equal 1, $?.exitstatus
+			assert_equal "a", File.read("a.txt")
+		end
+	end
+
+	def test_restore_cross_fs_unreadable_refused
+		strategy "freedesktop"
+		with_isolated_trash do |trash|
+			with_tmpfs do |dir|
+				FileUtils.mkdir "#{dir}/d"
+				File.write "#{dir}/d/inner", "i"
+				system "zap", "--", "#{dir}/d", out: File::NULL, err: File::NULL, exception: true
+				FileUtils.chmod 0o000, "#{trash}/files/d/inner"
+				begin
+					system "zap", "--restore", "--", "#{dir}/d", out: File::NULL, err: File::NULL
+					assert_equal 1, $?.exitstatus
+					refute File.exist? "#{dir}/d"
+					assert File.exist? "#{trash}/files/d/inner"
+					assert File.exist? "#{trash}/info/d.trashinfo"
+				ensure
+					FileUtils.chmod 0o644, "#{trash}/files/d/inner"
+				end
+			end
+		end
+	end
 end
