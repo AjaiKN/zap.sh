@@ -857,6 +857,19 @@ check_not_trash_sub_or_super_directory() {
 # Checks that FILE (an absolute path) can be moved into the trash directory
 # TRASH (which may be empty if unknown). Prints a message and fails if not.
 preflight_check() {
+	# Moving a directory to a different parent directory requires write
+	# permission on the directory itself (to update its ".." entry), so --force
+	# can't override that. (This is the behaviour on Linux; it's presumably the
+	# same on macOS and the BSDs, but I haven't verified that.)
+	if [ -d "$1" ] && [ ! -L "$1" ] && [ "$EUID" -ne 0 ] && [ ! -w "$1" ]; then
+		case "$ZAP_STRATEGY" in
+			(dangerous_*) ;;
+			(*)
+				echo "zap: Can't trash '$1': moving a directory requires write permission on it" >&2
+				return 1
+				;;
+		esac
+	fi
 	[ -n "$2" ] || return 0
 	check_not_trash_sub_or_super_directory "$1" "$2" || return 1
 	if [ -d "$2" ] && ! can_move_to "$2" "$1"; then
