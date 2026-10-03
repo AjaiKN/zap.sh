@@ -367,6 +367,20 @@ class TestZap < Minitest::Test
 		end
 	end
 
+	def test_macos_mv_restore_after_unrelated_rename_in_trash
+		strategy "macos_mv"
+		with_fake_home do |home|
+			File.write "a.txt", "a"
+			File.write "#{home}/.Trash/a 2.txt", "decoy"
+			system "zap", "--", "a.txt", out: File::NULL, exception: true
+			# A name that doesn't look like a.txt, so it has to be found by scanning.
+			File.rename "#{home}/.Trash/a.txt", "#{home}/.Trash/zzz"
+			system "zap", "--restore", "--", "a.txt", out: File::NULL, exception: true
+			assert_equal "a", File.read("a.txt")
+			assert_equal ["a 2.txt"], Dir.children("#{home}/.Trash")
+		end
+	end
+
 	def test_macos_mv_name_clash
 		strategy "macos_mv"
 		with_fake_home do |home|
