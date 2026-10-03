@@ -332,6 +332,7 @@ get_misc_trashdirs() {
 }
 
 ## Parse options
+failed=
 force=
 dry_run=
 verbose=
@@ -555,7 +556,12 @@ case "$ZAP_STRATEGY" in
 				fi
 			done
 			[ -z "$verbose" ] || echo mv -i "'$file'" "'$trash/files/$dest_filename'" '</dev/null' >&2
-			[ -n "$dry_run" ] || mv -i "$file" "$trash/files/$dest_filename" </dev/null
+			if [ -z "$dry_run" ] && ! mv -i "$file" "$trash/files/$dest_filename" </dev/null; then
+				command rm -f -- "$trash/info/$dest_filename.trashinfo"
+				echo "zap: Failed to move '$file' to the trash" >&2
+				[ -n "$force" ] || exit 1
+				failed=1
+			fi
 		done
 		;;
 
@@ -664,6 +670,8 @@ case "$ZAP_STRATEGY" in
 		exit 1
 		;;
 esac
+
+[ -z "$failed" ] || exit 1
 
 ## Notes
 
