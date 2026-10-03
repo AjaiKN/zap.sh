@@ -7,6 +7,10 @@ brew install ajaikn/tap/zap.sh
 *** Manual
 - Copy or symlink =bin/zap= into a directory on your PATH.
 - To install zsh completions /(optional)/: copy =completions/zsh/_zap= into your zsh completions directory, or source =zap.plugin.zsh=.
+** Restoring on macOS
+macOS doesn't record where trashed files came from in a form other tools can read, so when zap trashes something with one of the =macos_*= strategies, it writes its own record (a =.trashinfo= file with extra =X-Zap-*= keys) to =$XDG_DATA_HOME/zap/info= (default =~/.local/share/zap/info=). =zap --list= and =zap --restore= use these records, so they only know about files that zap itself trashed.
+
+Reading =~/.Trash= requires your terminal to have /Full Disk Access/ (System Settings → Privacy & Security). Without it, zap can still trash files, but it can't find them in the trash to record or restore them.
 ** Usage
 #+begin_src
 Usage: zap [OPTION]... [--] FILE...
@@ -28,10 +32,12 @@ Put each FILE in the trash. Currently supports macOS and Linux.
                            Can also be specified with the ZAP_STRATEGY environment variable, which this
                            option supersedes.
   -l, --list               List trashed files (oldest first) as DELETIONDATE<TAB>ORIGINALPATH.
-                           Only supported by the freedesktop strategy.
       --restore            Restore each FILE (given by its original path) from the trash. If a path was
                            trashed more than once, restore the most recent one. Refuses to overwrite.
-                           Only supported by the freedesktop strategy.
+                           --list and --restore work regardless of strategy. They see freedesktop.org
+                           trash directories, plus items zap trashed with the macOS strategies (recorded
+                           in $XDG_DATA_HOME/zap/info). Items trashed with other tools on macOS aren't
+                           seen.
   -d, --dir                Does nothing. For compatibility with rm.
   -r, -R, --recursive      Does nothing. For compatibility with rm.
 
