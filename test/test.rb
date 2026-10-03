@@ -424,11 +424,41 @@ class TestZap < Minitest::Test
 			assert File.exist? "good"
 
 			system "zap", "-f", "--", "end\n", "good", out: File::NULL, err: File::NULL
+			assert_equal 1, $?.exitstatus
 			assert File.exist? "end\n"
 			refute File.exist? "good"
 
 			system "zap", "--restore", "--", "end\n", out: File::NULL, err: File::NULL
 			refute $?.success?
+		end
+	end
+
+	def test_force_ignores_missing_files
+		strategy "freedesktop"
+		with_isolated_trash do
+			out = `zap -f -- does-not-exist 2>&1`
+			assert $?.success?
+			refute_match(/does not exist/, out)
+		end
+	end
+
+	def test_force_skips_untrashable_and_exits_1
+		skip "running as root" if Process.uid == 0
+		strategy "freedesktop"
+		with_isolated_trash do |trash|
+			FileUtils.mkdir "ro"
+			File.write "ro/child", "c"
+			File.write "good", "g"
+			FileUtils.chmod 0o555, "ro"
+			begin
+				system "zap", "-f", "--", "ro/child", "good", out: File::NULL, err: File::NULL
+				assert_equal 1, $?.exitstatus
+				assert File.exist? "ro/child"
+				refute File.exist? "good"
+				assert_equal ["good"], Dir.children("#{trash}/files")
+			ensure
+				FileUtils.chmod 0o755, "ro"
+			end
 		end
 	end
 end
