@@ -585,7 +585,7 @@ warn_full_disk_access() {
 
 # Prints DELETIONDATE<TAB>ORIGINALPATH for every trashed item, oldest first.
 list_trash() {
-	# shellcheck disable=SC2329 # called by each_trash_entry
+	# shellcheck disable=SC2317,SC2329 # called by each_trash_entry
 	print_entry() {
 		printf '%s\t%s\n' "$entry_date" "$entry_path"
 	}
@@ -787,7 +787,7 @@ find_restore_candidate() {
 		return 1
 	fi
 	restore_target=$(get_abs_filename "$1") || return 1
-	# shellcheck disable=SC2329 # called by each_trash_entry
+	# shellcheck disable=SC2317,SC2329 # called by each_trash_entry
 	consider_entry() {
 		if [ "$entry_path" = "$restore_target" ] && ! [[ $entry_date < $best_date ]]; then
 			best_info=$entry_info
