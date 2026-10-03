@@ -95,8 +95,8 @@ urlencode() {
 can_delete_file() {
 	# File must exist.
 	# (If it's a broken symlink, -e will return false, but -L will return true.)
-	if [ ! -e "$1" ] && [ ! -L "$file" ]; then
-		echo "zap: File '$file' does not exist" >&2
+	if [ ! -e "$1" ] && [ ! -L "$1" ]; then
+		echo "zap: File '$1' does not exist" >&2
 		return 1
 	fi
 	# If we're the superuser, we can always delete.
@@ -107,7 +107,7 @@ can_delete_file() {
 	local dir
 	dir=$(mydirname "$1") || return 1
 	if [ ! -w "$dir" ] || [ ! -x "$dir" ]; then
-		echo "Cannot zap '$file' because we don't have write and execute permissions on its parent directory '$(mydirname "$file")'" >&2
+		echo "Cannot zap '$1' because we don't have write and execute permissions on its parent directory '$dir'" >&2
 		return 1
 	fi
 }
@@ -123,7 +123,7 @@ is_writable_by_current_user() {
 	fi
 	# Check if writable.
 	if [ ! -w "$1" ]; then
-		echo "zap: The file '$file' is not writable by the current user. Use --force to override." >&2
+		echo "zap: The file '$1' is not writable by the current user. Use --force to override." >&2
 		return 1
 	fi
 }
