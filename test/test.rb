@@ -173,6 +173,7 @@ class TestZap < Minitest::Test
 	end
 
 	def test_gio
+		skip "gio uses the system trash on macOS" if `uname -s`.chomp == 'Darwin'
 		skip "gio CLI not available" unless system "which gio"
 		strategy "gio"
 		FileUtils.touch @filename
@@ -413,6 +414,7 @@ class TestZap < Minitest::Test
 	end
 
 	def test_gio_restore
+		skip "gio uses the system trash on macOS, without .trashinfo files" if `uname -s`.chomp == 'Darwin'
 		skip "gio CLI not available" unless system "which gio", out: File::NULL, err: File::NULL
 		restore_round_trip_with "gio"
 	end
