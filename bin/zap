@@ -41,6 +41,8 @@ print_usage() {
 	# NOTE: When this changes, rerun $DOTFILES/scripts/generate-manpages.sh
 	cat <<EOF
 Usage: $0 [OPTION]... [--] FILE...
+  or:  $0 --list
+  or:  $0 --restore [OPTION]... [--] FILE...
 Put each FILE in the trash. Currently supports macOS and Linux.
 
   -h, --help               Show this usage message.
@@ -56,6 +58,11 @@ Put each FILE in the trash. Currently supports macOS and Linux.
   -s, --strategy=STRATEGY  Specify which trashing strategy to use.
                            Can also be specified with the ZAP_STRATEGY environment variable, which this
                            option supersedes.
+  -l, --list               List trashed files (oldest first) as DELETIONDATE<TAB>ORIGINALPATH.
+                           Only supported by the freedesktop strategy.
+      --restore            Restore each FILE (given by its original path) from the trash. If a path was
+                           trashed more than once, restore the most recent one. Refuses to overwrite.
+                           Only supported by the freedesktop strategy.
   -d, --dir                Does nothing. For compatibility with rm.
   -r, -R, --recursive      Does nothing. For compatibility with rm.
 
@@ -90,6 +97,11 @@ urlencode_help() {
 }
 urlencode() {
 	printf '%s' "$1" | urlencode_help
+}
+urldecode() {
+	# Escape existing backslashes, then turn each %XX into \xXX for printf %b.
+	local s=${1//\\/\\\\}
+	printf '%b' "${s//%/\\x}"
 }
 
 can_delete_file() {
@@ -317,10 +329,47 @@ get_freedesktop_trashdirs() {
 		printf '%s\n' "$home_trashdir"
 	fi
 
-	local mountpoint dir
+	local mountpoint
 	list_mountpoints | while IFS= read -r mountpoint; do
-		ls -d "$mountpoint"/.Trash/* "$mountpoint"/.Trash-* 2>/dev/null || :
+		ls -d "$mountpoint/.Trash/$UID" "$mountpoint/.Trash-$UID" 2>/dev/null || :
 	done
+}
+
+# read_trashinfo TRASHDIR INFOFILE
+# Sets $trashinfo_path (absolute, decoded) and $trashinfo_date.
+read_trashinfo() {
+	local trashdir="$1" line in_section=
+	trashinfo_path=
+	trashinfo_date=
+	while IFS= read -r line || [ -n "$line" ]; do
+		case "$line" in
+			('[Trash Info]') in_section=1 ;;
+			('['*) in_section= ;;
+			(Path=*) [ -z "$in_section" ] || trashinfo_path=$(urldecode "${line#Path=}") ;;
+			(DeletionDate=*) [ -z "$in_section" ] || trashinfo_date=${line#DeletionDate=} ;;
+		esac
+	done <"$2"
+	[ -n "$trashinfo_path" ] || return 1
+	# Paths in top-directory trashes may be relative to the top directory.
+	if [[ $trashinfo_path != /* ]]; then
+		case "$trashdir" in
+			(*/.Trash/"$UID") trashinfo_path="${trashdir%/.Trash/"$UID"}/$trashinfo_path" ;;
+			(*/.Trash-"$UID") trashinfo_path="${trashdir%/.Trash-"$UID"}/$trashinfo_path" ;;
+			(*) return 1 ;;
+		esac
+	fi
+}
+
+# Prints DELETIONDATE<TAB>ORIGINALPATH for every trashed item, oldest first.
+list_freedesktop_trash() {
+	local trashdir info
+	get_freedesktop_trashdirs | while IFS= read -r trashdir; do
+		for info in "$trashdir"/info/*.trashinfo; do
+			[ -f "$info" ] || continue
+			read_trashinfo "$trashdir" "$info" || continue
+			printf '%s\t%s\n' "$trashinfo_date" "$trashinfo_path"
+		done
+	done | LC_ALL=C sort -s -t "$(printf '\t')" -k1,1
 }
 
 get_misc_trashdirs() {
@@ -336,6 +385,7 @@ get_misc_trashdirs() {
 }
 
 ## Parse options
+action=put
 failed=
 force=
 dry_run=
@@ -372,6 +422,14 @@ while [[ $# -gt 0 ]]; do
 			shift
 			;;
 		(-d|--dir|-r|-R|--recursive) #no-op, for rm compatibility
+			shift
+			;;
+		(-l|--list)
+			action=list
+			shift
+			;;
+		(--restore)
+			action=restore
 			shift
 			;;
 		(-v|--verbose)
@@ -446,37 +504,9 @@ Try '$0 --help' for more information."
 	esac
 done
 
-if [[ $# -eq 0 ]] && [ -z $force ]; then
+if [[ $# -eq 0 ]] && [ -z $force ] && [ "$action" = put ]; then
 	print_usage
 	exit 2
-fi
-
-## Checks
-files=()
-for file in "$@"; do
-	if ! can_delete_file "$file"; then
-		[ -n "$force" ] || exit 1
-	elif [ -z "$force" ] && ! is_writable_by_current_user "$file"; then
-		exit 1
-	else
-		file=$(get_abs_filename "$file")
-		[ -z "$verbose" ] || echo "Will zap $file"
-		files+=("$file")
-	fi
-done
-set -- "${files[@]}"
-
-for file in "$@"; do
-	echo "$file"
-done
-
-if [[ $# -eq 0 ]]; then
-	if [ -n "$force" ]; then
-		exit
-	else
-		echo "Nothing to delete"
-		exit 1
-	fi
 fi
 
 ## Choose strategy
@@ -506,6 +536,100 @@ choose_strategy() {
 
 ZAP_STRATEGY=${ZAP_STRATEGY:-$(choose_strategy)}
 [ -n "$verbose" ] && echo "Using strategy: $ZAP_STRATEGY" >&2
+
+## List / restore
+
+if [ "$action" = list ] || [ "$action" = restore ]; then
+	if [ "$ZAP_STRATEGY" != freedesktop ]; then
+		echo "zap: --$action is not supported for strategy '$ZAP_STRATEGY'" >&2
+		exit 1
+	fi
+fi
+
+if [ "$action" = list ]; then
+	if [[ $# -gt 0 ]]; then
+		echo "zap: --list doesn't take any arguments" >&2
+		exit 2
+	fi
+	list_freedesktop_trash
+	exit
+fi
+
+restore_one() {
+	local target trashdir info name best_info='' best_trashdir='' best_date=''
+	target=$(get_abs_filename "$1") || return 1
+	while IFS= read -r trashdir; do
+		for info in "$trashdir"/info/*.trashinfo; do
+			[ -f "$info" ] || continue
+			read_trashinfo "$trashdir" "$info" || continue
+			if [ "$trashinfo_path" = "$target" ] && ! [[ $trashinfo_date < $best_date ]]; then
+				best_info=$info
+				best_trashdir=$trashdir
+				best_date=$trashinfo_date
+			fi
+		done
+	done < <(get_freedesktop_trashdirs)
+
+	if [ -z "$best_info" ]; then
+		echo "zap: '$target' was not found in the trash" >&2
+		return 1
+	fi
+	name=$(mybasename "$best_info")
+	name=${name%.trashinfo}
+	if [ -e "$target" ] || [ -L "$target" ]; then
+		echo "zap: Can't restore '$target': it already exists" >&2
+		return 1
+	fi
+	[ -z "$verbose" ] || echo mv -i "'$best_trashdir/files/$name'" "'$target'" '</dev/null' >&2
+	if [ -z "$dry_run" ]; then
+		mv -i "$best_trashdir/files/$name" "$target" </dev/null || return 1
+		command rm -f -- "$best_info"
+	fi
+	printf '%s\n' "$target"
+}
+
+if [ "$action" = restore ]; then
+	if [[ $# -eq 0 ]]; then
+		echo "zap: --restore requires at least one FILE" >&2
+		exit 2
+	fi
+	for file in "$@"; do
+		if ! restore_one "$file"; then
+			[ -n "$force" ] || exit 1
+			failed=1
+		fi
+	done
+	[ -z "$failed" ] || exit 1
+	exit
+fi
+
+## Checks
+files=()
+for file in "$@"; do
+	if ! can_delete_file "$file"; then
+		[ -n "$force" ] || exit 1
+	elif [ -z "$force" ] && ! is_writable_by_current_user "$file"; then
+		exit 1
+	else
+		file=$(get_abs_filename "$file")
+		[ -z "$verbose" ] || echo "Will zap $file"
+		files+=("$file")
+	fi
+done
+set -- "${files[@]}"
+
+for file in "$@"; do
+	echo "$file"
+done
+
+if [[ $# -eq 0 ]]; then
+	if [ -n "$force" ]; then
+		exit
+	else
+		echo "Nothing to delete"
+		exit 1
+	fi
+fi
 
 ## Execute
 
