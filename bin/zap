@@ -139,10 +139,6 @@ can_read_file() {
 	if [ "$EUID" -eq 0 ]; then
 		return 0
 	fi
-	# If we own the file, we can always read it.
-	if [ -O "$1" ]; then
-		return 0
-	fi
 	# Check if readable.
 	[ -r "$1" ]
 }
@@ -157,7 +153,8 @@ can_move_to() {
 		# If the file and destination directory aren't on the same filesystem, then
 		# mv will need to copy instead of rename. In order to copy, we need to read
 		# the file.
-		if ! is_same_filesystem "$file" "$destdir" && ! can_read_file "$file"; then
+		# (Symlinks are moved as-is, so their targets don't need to be readable.)
+		if [ ! -L "$file" ] && ! is_same_filesystem "$file" "$destdir" && ! can_read_file "$file"; then
 			return 1
 		fi
 	done
@@ -267,15 +264,22 @@ get_top_freedesktop_trashdir() {
 			printf '%s\n' "$topdir/.Trash-$UID"
 			return
 		fi
+
+		# We couldn't use a trash directory on the file's own filesystem.
+		return 3
 	fi
 
-	return 3
+	return 4
 }
 
 get_freedesktop_trashdir() {
 	local ret
-	ret=$(get_top_freedesktop_trashdir "$1") ||
+	ret=$(get_top_freedesktop_trashdir "$1") || {
+		if [ $? -eq 3 ]; then
+			echo "zap: Warning: can't use a trash directory on the same filesystem as '$1'; it will be copied to the home trash instead" >&2
+		fi
 		ret="${XDG_DATA_HOME:-$HOME/.local/share}/Trash"
+	}
 
 	[ -z "$verbose" ] || echo mkdir -p "'$ret"/{files,info}"'" '>&2' >&2
 	[ -n "$dry_run" ] || mkdir -p "$ret"/{files,info} >&2
@@ -454,10 +458,6 @@ for file in "$@"; do
 	elif [ -z "$force" ] && ! is_writable_by_current_user "$file"; then
 		exit 1
 	else
-		# TODO: If the destination directory is on a different filesystem, the file
-		# is owned by another user, we're not the superuser, and we don't have read
-		# permissions on the file, then we won't be able to move it. See the
-		# can_move_to() function above.
 		file=$(get_abs_filename "$file")
 		[ -z "$verbose" ] || echo "Will zap $file"
 		files+=("$file")
@@ -538,6 +538,12 @@ case "$ZAP_STRATEGY" in
 		for file in "$@"; do
 			trash=$(get_freedesktop_trashdir "$file")
 			check_not_trash_sub_or_super_directory "$file"
+			if [ -d "$trash/files" ] && ! can_move_to "$trash/files" "$file"; then
+				echo "zap: Can't trash '$file': it's on a different filesystem from '$trash' and isn't readable, so it can't be copied" >&2
+				[ -n "$force" ] || exit 1
+				failed=1
+				continue
+			fi
 			thedate=$(date +"%Y-%m-%dT%H:%M:%S")
 			dest_filename=$(mybasename "$file")
 			if [ -e "$trash/info/$dest_filename.trashinfo" ] || [ -L "$trash/info/$dest_filename.trashinfo" ] || [ -e "$trash/files/$dest_filename" ] || [ -L "$trash/files/$dest_filename" ]; then
