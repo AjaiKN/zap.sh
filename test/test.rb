@@ -554,4 +554,24 @@ class TestZap < Minitest::Test
 			end
 		end
 	end
+
+	def test_force_read_only_directory_refused
+		skip "running as root" if Process.uid == 0
+		strategy "freedesktop"
+		with_isolated_trash do |trash|
+			FileUtils.mkdir "d"
+			File.write "d/inner", "i"
+			FileUtils.chmod 0o555, "d"
+			begin
+				err = IO.popen(["zap", "-f", "--", "d"], err: [:child, :out], &:read)
+				assert_equal 1, $?.exitstatus
+				assert_match(/requires write permission/, err)
+				refute_match(/^mv: /, err)
+				assert File.exist? "d/inner"
+				assert_empty Dir.glob("#{trash}/{files,info}/*")
+			ensure
+				FileUtils.chmod 0o755, "d"
+			end
+		end
+	end
 end
