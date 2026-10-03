@@ -53,6 +53,9 @@ Put each FILE in the trash. Currently supports macOS and Linux.
   dangerous_rm             Use rm
   dangerous_shred          Use GNU shred
 #+end_src
+** Limitations
+- File names ending in a newline aren't supported; =zap= refuses to trash (or restore) them.
+
 ** Comparison table
 Based on [[https://github.com/umlx5h/gtrash/blob/main/doc/alternatives.md?plain=1][gtrash's comparison table]].
 
