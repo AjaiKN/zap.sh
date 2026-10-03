@@ -46,12 +46,12 @@ Usage: ${0##*/} [OPTION]... [--] FILE...
 Put each FILE in the trash. Currently supports macOS and Linux.
 
   -h, --help               Show this usage message.
-  -f, --force              Override non-writable files, and ignore nonexistent or otherwise untrashable files.
-                           If any of the files are owned by the current user but don't have write permissions,
-                           delete them anyway. If any of the files are nonexistent, or if we can't trash them
-                           (because their directories aren't writable and executable), ignore them and still
-                           trash everything else. (Otherwise, this command will refuse to do anything if any
-                           of the arguments are untrashable.)
+  -f, --force              Override non-writable files, ignore nonexistent files, and skip untrashable ones.
+                           Like rm -f: files that don't have write permissions are trashed anyway, nonexistent
+                           files are silently ignored, and files that can't be trashed (e.g. because their
+                           directories aren't writable) are reported and skipped while everything else is
+                           still trashed, in which case the exit status is 1. Without --force, this command
+                           refuses to do anything if any of the arguments would fail to be trashed.
   -n, --dry-run            Don't actually trash anything; just print what this command *would* do.
                            This option implies --verbose.
   -v, --verbose            Be more verbose.
@@ -815,11 +815,16 @@ ZAP_STRATEGY=${ZAP_STRATEGY:-$(choose_strategy)}
 ## Checks
 files=()
 for file in "$@"; do
-	if [[ $file == *$'\n' ]]; then
+	if [ ! -e "$file" ] && [ ! -L "$file" ] && [ -n "$force" ]; then
+		# Like rm -f, silently ignore nonexistent files.
+		continue
+	elif [[ $file == *$'\n' ]]; then
 		echo "zap: Can't trash '$file': file names ending in a newline aren't supported" >&2
 		[ -n "$force" ] || exit 1
+		failed=1
 	elif ! can_delete_file "$file"; then
 		[ -n "$force" ] || exit 1
+		failed=1
 	elif [ -z "$force" ] && ! is_writable_by_current_user "$file"; then
 		exit 1
 	else
@@ -836,6 +841,7 @@ done
 
 if [[ $# -eq 0 ]]; then
 	if [ -n "$force" ]; then
+		[ -z "$failed" ] || exit 1
 		exit
 	else
 		echo "Nothing to delete"
