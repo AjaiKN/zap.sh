@@ -535,7 +535,7 @@ record_trashed() {
 	local identities="$1" f id trashed
 	shift
 	for f in "$@"; do
-		IFS= read -r id || id=
+		IFS= read -r -u 3 id || id=
 		if [ -n "$id" ] && [ ! -e "$f" ] && [ ! -L "$f" ]; then
 			if trashed=$(find_trashed_by_identity "$id"); then
 				write_zap_record "$f" "$trashed"
@@ -544,7 +544,7 @@ record_trashed() {
 				warn_full_disk_access
 			fi
 		fi
-	done <<<"$identities"
+	done 3<<<"$identities"
 }
 
 # write_zap_record ORIGINALPATH TRASHEDPATH
