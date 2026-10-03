@@ -10,6 +10,8 @@ brew install ajaikn/tap/zap.sh
 ** Usage
 #+begin_src
 Usage: zap [OPTION]... [--] FILE...
+  or:  zap --list
+  or:  zap --restore [OPTION]... [--] FILE...
 Put each FILE in the trash. Currently supports macOS and Linux.
 
   -h, --help               Show this usage message.
@@ -25,6 +27,11 @@ Put each FILE in the trash. Currently supports macOS and Linux.
   -s, --strategy=STRATEGY  Specify which trashing strategy to use.
                            Can also be specified with the ZAP_STRATEGY environment variable, which this
                            option supersedes.
+  -l, --list               List trashed files (oldest first) as DELETIONDATE<TAB>ORIGINALPATH.
+                           Only supported by the freedesktop strategy.
+      --restore            Restore each FILE (given by its original path) from the trash. If a path was
+                           trashed more than once, restore the most recent one. Refuses to overwrite.
+                           Only supported by the freedesktop strategy.
   -d, --dir                Does nothing. For compatibility with rm.
   -r, -R, --recursive      Does nothing. For compatibility with rm.
 
@@ -51,8 +58,8 @@ Based on [[https://github.com/umlx5h/gtrash/blob/main/doc/alternatives.md?plain=
 | Architecture                                               | Single script | Single binary & Multi subcommands | Multi commands   | Single binary & Multi subcommands | Single binary               | Single command                           | Single binary                          | Single script                                | Single script | Single binary               |
 | Has rm-like interface                                      | ✅           | ✅                               | ✅              | ❌                               | ✅                         | ✅ (ignores all flags)                  | ✅ (ignores all flags)                | ✅                                          | ✅           | ✅                         |
 | Command to put FILE in trash                               | ~zap FILE~      | ~gtrash put FILE~                   | ~trash-put FILE~   | ~trashy FILE~ or ~trashy put FILE~    | ~trash FILE~                  | ~trash FILE~                               | ~trash FILE~                             | ~rm-trash FILE~                                | ~trash FILE~    | ~gomi FILE~                   |
-| Command to list trash contents                             | ❌           | ~gtrash find~                       | ~trash-list~       | ~trashy list~                       | ~trash --list~                | ❌                                      | ~trash -l~                               | ❌                                          | ❌           | ❌                         |
-| Command to restore FILE from trash                         | ❌           | ~gtrash find REGEX --restore~       | ~trash-restore~    | ~trashy restore REGEX~              | ~trash --restore FILE~ ️     | ❌                                      | ❌                                    | ❌                                          | ❌           | ~gomi --restore~              |
+| Command to list trash contents                             | ~zap --list~ | ~gtrash find~                       | ~trash-list~       | ~trashy list~                       | ~trash --list~                | ❌                                      | ~trash -l~                               | ❌                                          | ❌           | ❌                         |
+| Command to restore FILE from trash                         | ~zap --restore FILE~ | ~gtrash find REGEX --restore~       | ~trash-restore~    | ~trashy restore REGEX~              | ~trash --restore FILE~ ️     | ❌                                      | ❌                                    | ❌                                          | ❌           | ~gomi --restore~              |
 | Command to permanently delete/empty FILE from trash        | ❌           | ~gtrash find REGEX --rm~            | ~trash-rm FILE~    | ~trashy empty FILE~                 | ~trash --delete FILE~         | ❌                                      | ❌                                    | ❌                                          | ❌           | ❌                         |
 | Command to fully empty trash                               | ❌           | ~gtrash find --rm~                  | ~trash-empty~      | ~trashy empty --all~                | ~trash --empty~               | [[https://github.com/sindresorhus/empty-trash-cli][available in separate project]]            | ~trash -e~ (or securely with ~trash -s~)   | ❌                                          | ❌           | ~gomi --prune=0m~             |
 | Restore with TUI                                           | ❌           | ~gtrash restore~                    | ❌              | ❌                               | ❌                         | ❌                                      | ❌                                    | ❌                                          | ❌           | ~gomi --restore~              |
