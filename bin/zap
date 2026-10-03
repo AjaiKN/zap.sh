@@ -509,7 +509,7 @@ find_trashed_by_identity() {
 #   LOCATION  where the item currently is in the trash
 #   INFO      its .trashinfo file
 each_trash_entry() {
-	local trashdir info name location misc_trashdirs
+	local trashdir info name location misc_trashdirs='' have_misc_trashdirs=''
 	while IFS= read -r trashdir; do
 		for info in "$trashdir"/info/*.trashinfo; do
 			[ -f "$info" ] || continue
@@ -527,7 +527,7 @@ each_trash_entry() {
 		if [ -n "$_ti_trashed_path" ] && identity_matches "$_ti_trashed_path" "$_ti_identity"; then
 			location=$_ti_trashed_path
 		elif
-			[ -n "${misc_trashdirs+set}" ] || misc_trashdirs=$(get_misc_trashdirs)
+			[ -n "$have_misc_trashdirs" ] || { misc_trashdirs=$(get_misc_trashdirs); have_misc_trashdirs=1; }
 			location=$(find_trashed_by_identity "$_ti_identity" "$(mybasename "${_ti_trashed_path:-$_ti_path}")" "$misc_trashdirs")
 		then
 			:
@@ -554,12 +554,12 @@ remember_identities() {
 # no longer at its original path, find it in the trash by its identity and write
 # a record to $zap_recorddir/info so that --list and --restore can find it.
 record_trashed() {
-	local identities="$1" f id trashed misc_trashdirs
+	local identities="$1" f id trashed misc_trashdirs='' have_misc_trashdirs=''
 	shift
 	for f in "$@"; do
 		IFS= read -r -u 3 id || id=
 		if [ -n "$id" ] && [ ! -e "$f" ] && [ ! -L "$f" ]; then
-			[ -n "${misc_trashdirs+set}" ] || misc_trashdirs=$(get_misc_trashdirs)
+			[ -n "$have_misc_trashdirs" ] || { misc_trashdirs=$(get_misc_trashdirs); have_misc_trashdirs=1; }
 			if trashed=$(find_trashed_by_identity "$id" "$(mybasename "$f")" "$misc_trashdirs"); then
 				write_zap_record "$f" "$trashed"
 			else
