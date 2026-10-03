@@ -222,4 +222,72 @@ class TestZap < Minitest::Test
 			end
 		end
 	end
+
+	def test_list
+		strategy "freedesktop"
+		with_isolated_trash do
+			File.write "a.txt", "a"
+			File.write "b.txt", "b"
+			system "zap", "--", "a.txt", out: File::NULL, exception: true
+			system "zap", "--", "b.txt", out: File::NULL, exception: true
+			out = `zap --list`.b
+			assert $?.success?
+			lines = out.lines.map(&:chomp).select { _1.end_with?("/a.txt", "/b.txt") }
+			assert_equal ["#{FileUtils.pwd}/a.txt", "#{FileUtils.pwd}/b.txt"], lines.map { _1.split("\t", 2)[1] }
+			lines.each { assert_match(/\A\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\t/, _1) }
+		end
+	end
+
+	def test_list_unsupported_strategy
+		strategy "dangerous_rm"
+		system "zap", "--list", out: File::NULL, err: File::NULL
+		assert_equal 1, $?.exitstatus
+	end
+
+	def test_restore_round_trip
+		strategy "freedesktop"
+		with_isolated_trash do |trash|
+			system "zap", "--", @filename, out: File::NULL, exception: true
+			refute File.exist? @filename
+			system "zap", "--restore", "--", @filename, out: File::NULL, exception: true
+			assert_equal @contents, File.binread(@filename)
+			assert_empty Dir.children("#{trash}/info")
+			assert_empty Dir.children("#{trash}/files")
+		end
+	end
+
+	def test_restore_refuses_to_overwrite
+		strategy "freedesktop"
+		with_isolated_trash do |trash|
+			system "zap", "--", @filename, out: File::NULL, exception: true
+			File.write @filename, "new"
+			system "zap", "--restore", "--", @filename, out: File::NULL, err: File::NULL
+			refute $?.success?
+			assert_equal "new", File.read(@filename)
+			assert_equal 1, Dir.children("#{trash}/info").length
+		end
+	end
+
+	def test_restore_picks_newest
+		strategy "freedesktop"
+		with_isolated_trash do
+			system "zap", "--", @filename, out: File::NULL, exception: true
+			sleep 1.1 # DeletionDate has one-second resolution
+			File.write @filename, "newer"
+			system "zap", "--", @filename, out: File::NULL, exception: true
+			system "zap", "--restore", "--", @filename, out: File::NULL, exception: true
+			assert_equal "newer", File.read(@filename)
+			File.delete @filename
+			system "zap", "--restore", "--", @filename, out: File::NULL, exception: true
+			assert_equal @contents, File.binread(@filename)
+		end
+	end
+
+	def test_restore_missing
+		strategy "freedesktop"
+		with_isolated_trash do
+			system "zap", "--restore", "--", "never-trashed", out: File::NULL, err: File::NULL
+			assert_equal 1, $?.exitstatus
+		end
+	end
 end
