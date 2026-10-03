@@ -69,6 +69,17 @@ class TestZap < Minitest::Test
 		end
 	end
 
+	## Point XDG_DATA_HOME at a fresh temp dir for the duration of the block.
+	def with_isolated_trash
+		old = ENV['XDG_DATA_HOME']
+		mktmpdir_home do |dir|
+			ENV['XDG_DATA_HOME'] = dir
+			yield "#{dir}/Trash"
+		ensure
+			ENV['XDG_DATA_HOME'] = old
+		end
+	end
+
 	def setup
 		puts; puts
 		@dir = mktmpdir_home
@@ -191,5 +202,24 @@ class TestZap < Minitest::Test
 		assert $?.success?
 		assert_match(/Using strategy: dangerous_rm/, out)
 		assert File.exist? @filename
+	end
+
+	def test_freedesktop_failed_move_leaves_no_trashinfo
+		skip "running as root" if Process.uid == 0
+		strategy "freedesktop"
+		with_isolated_trash do |trash|
+			FileUtils.mkdir_p ["#{trash}/files", "#{trash}/info"]
+			FileUtils.chmod 0o500, "#{trash}/files"
+			begin
+				[[], ["-f"]].each do |flags|
+					system "zap", *flags, "--", @filename, out: File::NULL, err: File::NULL
+					refute $?.success?
+					assert File.exist? @filename
+					assert_empty Dir.children("#{trash}/info")
+				end
+			ensure
+				FileUtils.chmod 0o700, "#{trash}/files"
+			end
+		end
 	end
 end
