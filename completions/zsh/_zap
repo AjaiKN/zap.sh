@@ -20,6 +20,8 @@ _arguments -s \
 	'(-n --dry-run)'{-n,--dry-run}'[Don'\''t actually trash anything; implies --verbose]' \
 	'(-v --verbose)'{-v,--verbose}'[Be more verbose]' \
 	'(-s --strategy=)'{-s,--strategy=}'[Specify which trashing strategy to use]:strategy:(( $strategies ))' \
+	'(- *)'{-l,--list}'[List trashed files (freedesktop strategy only)]' \
+	'(-l --list)--restore[Restore each FILE (by original path) from the trash]' \
 	'(-d --dir)'{-d,--dir}'[Does nothing. For compatibility with rm]' \
 	'(-r -R --recursive)'{-r,-R,--recursive}'[Does nothing. For compatibility with rm]' \
 	'*:file:_files'
