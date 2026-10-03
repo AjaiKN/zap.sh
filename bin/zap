@@ -738,6 +738,10 @@ fi
 
 restore_one() {
 	local target best_info='' best_location='' best_date=''
+	if [[ $1 == *$'\n' ]]; then
+		echo "zap: Can't restore '$1': file names ending in a newline aren't supported" >&2
+		return 1
+	fi
 	target=$(get_abs_filename "$1") || return 1
 	# shellcheck disable=SC2329 # called by each_trash_entry
 	consider_entry() {
@@ -811,7 +815,10 @@ ZAP_STRATEGY=${ZAP_STRATEGY:-$(choose_strategy)}
 ## Checks
 files=()
 for file in "$@"; do
-	if ! can_delete_file "$file"; then
+	if [[ $file == *$'\n' ]]; then
+		echo "zap: Can't trash '$file': file names ending in a newline aren't supported" >&2
+		[ -n "$force" ] || exit 1
+	elif ! can_delete_file "$file"; then
 		[ -n "$force" ] || exit 1
 	elif [ -z "$force" ] && ! is_writable_by_current_user "$file"; then
 		exit 1

@@ -411,4 +411,24 @@ class TestZap < Minitest::Test
 		skip "not on mac, or ~/.Trash not readable" unless macos_trash_readable?
 		restore_round_trip_with "macos_applescript"
 	end
+
+	def test_refuses_trailing_newline
+		strategy "freedesktop"
+		with_isolated_trash do |trash|
+			File.write "end\n", "x"
+			File.write "good", "g"
+			err = IO.popen(["zap", "--", "good", "end\n"], err: [:child, :out], &:read)
+			refute $?.success?
+			assert_match(/newline/, err)
+			assert File.exist? "end\n"
+			assert File.exist? "good"
+
+			system "zap", "-f", "--", "end\n", "good", out: File::NULL, err: File::NULL
+			assert File.exist? "end\n"
+			refute File.exist? "good"
+
+			system "zap", "--restore", "--", "end\n", out: File::NULL, err: File::NULL
+			refute $?.success?
+		end
+	end
 end
