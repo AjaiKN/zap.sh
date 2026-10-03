@@ -602,9 +602,23 @@ get_misc_trashdirs() {
 				[ ! -d "$dir" ] || printf '%s\n' "$dir"
 			done
 		done
-	} | while IFS= read -r dir; do
-		(cd "$dir" 2>/dev/null && pwd -P) || :
-	done | sort -u
+	} | {
+		# Skip duplicates by device and inode rather than by path, since e.g. on
+		# a case-insensitive filesystem, ~/.Trash and ~/.trash are the same
+		# directory (and pwd -P keeps whichever spelling it was given).
+		local seen=' ' id
+		while IFS= read -r dir; do
+			dir=$(cd "$dir" 2>/dev/null && pwd -P) || continue
+			id="$(stat_device "$dir"):$(stat_inode "$dir")" || continue
+			case "$seen" in
+				(*" $id "*) ;;
+				(*)
+					seen="$seen$id "
+					printf '%s\n' "$dir"
+					;;
+			esac
+		done
+	}
 }
 
 ## Parse options

@@ -401,6 +401,7 @@ class TestZap < Minitest::Test
 			File.write "a.txt", "a"
 			system "zap", "--", "a.txt", out: File::NULL, err: File::NULL, exception: true
 			refute File.exist? "a.txt"
+			yield ENV['XDG_DATA_HOME'] if block_given?
 			system "zap", "--restore", "--", "a.txt", out: File::NULL, exception: true
 			assert_equal "a", File.read("a.txt")
 		end
@@ -422,7 +423,12 @@ class TestZap < Minitest::Test
 
 	def test_macos_trash_command_restore
 		skip "not on mac, or ~/.Trash not readable" unless macos_trash_readable? && File.executable?("/usr/bin/trash")
-		restore_round_trip_with "macos_trash_command"
+		restore_round_trip_with("macos_trash_command") do |xdg|
+			# The record should point into ~/.Trash, spelled correctly even on a
+			# case-insensitive filesystem where ~/.trash is the same directory.
+			record = Dir.glob("#{xdg}/zap/info/*.trashinfo").first
+			assert_match(%r{^X-Zap-TrashedPath=#{Regexp.escape(Dir.home)}/\.Trash/a\.txt}, File.read(record))
+		end
 	end
 
 	def test_macos_applescript_restore
