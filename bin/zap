@@ -329,19 +329,20 @@ get_freedesktop_trashdir() {
 # TRASHDIR/info/NAME.trashinfo nor TRASHDIR/files/NAME already exists. Never
 # overwrites anything. Prints NAME followed by a "/" (so that command
 # substitution doesn't strip trailing newlines from NAME).
-write_trashinfo() {
-	local trash="$1" base="$2" thedate="$3" contents="$4" name
+write_trashinfo() (
+	# (Subshell, so that noclobber doesn't leak out.)
+	local trashdir="$1" base="$2" thedate="$3" contents="$4" name
 	set -o noclobber # don't overwrite file when using >
 	name=$base
-	if [ -e "$trash/info/$name.trashinfo" ] || [ -L "$trash/info/$name.trashinfo" ] || [ -e "$trash/files/$name" ] || [ -L "$trash/files/$name" ]; then
+	if [ -e "$trashdir/info/$name.trashinfo" ] || [ -L "$trashdir/info/$name.trashinfo" ] || [ -e "$trashdir/files/$name" ] || [ -L "$trashdir/files/$name" ]; then
 		name="$base $thedate"
 	fi
-	while [ -e "$trash/info/$name.trashinfo" ] || [ -L "$trash/info/$name.trashinfo" ] || [ -e "$trash/files/$name" ] || [ -L "$trash/files/$name" ]; do
+	while [ -e "$trashdir/info/$name.trashinfo" ] || [ -L "$trashdir/info/$name.trashinfo" ] || [ -e "$trashdir/files/$name" ] || [ -L "$trashdir/files/$name" ]; do
 		name="$base $thedate $RANDOM"
 	done
 	while : ; do
-		[ -z "$verbose" ] || printf 'Writing to "%s":\n%s\n' "$trash/info/$name.trashinfo" "$(printf '%s\n' "$contents" | sed 's/^/\t/')" >&2
-		if [ -n "$dry_run" ] || printf '%s\n' "$contents" >"$trash/info/$name.trashinfo"; then
+		[ -z "$verbose" ] || printf 'Writing to "%s":\n%s\n' "$trashdir/info/$name.trashinfo" "$(printf '%s\n' "$contents" | sed 's/^/\t/')" >&2
+		if [ -n "$dry_run" ] || printf '%s\n' "$contents" >"$trashdir/info/$name.trashinfo"; then
 			break
 		else
 			[ -z "$verbose" ] || printf 'Failed to write! Trying a different name. ' >&2
@@ -349,7 +350,7 @@ write_trashinfo() {
 		fi
 	done
 	printf '%s/' "$name"
-}
+)
 
 list_mountpoints() {
 	df -P "$@" | {
@@ -494,6 +495,76 @@ each_trash_entry() {
 		entry_info=$info
 		"$1"
 	done
+}
+
+# remember_identities FILE...
+# Saves the identity of each FILE, for record_trashed to use after trashing.
+remember_identities() {
+	remembered_devices=() remembered_inodes=() remembered_mtimes=() remembered_sizes=()
+	local f
+	for f in "$@"; do
+		if file_identity "$f"; then
+			remembered_devices+=("$identity_device")
+			remembered_inodes+=("$identity_inode")
+			remembered_mtimes+=("$identity_mtime")
+			remembered_sizes+=("$identity_size")
+		else
+			remembered_devices+=('') remembered_inodes+=('') remembered_mtimes+=('') remembered_sizes+=('')
+		fi
+	done
+}
+
+# record_trashed FILE...
+# For each FILE (the same list passed to remember_identities) that's no longer
+# at its original path, find it in the trash by its remembered identity and
+# write a record to $zap_recorddir/info so that --list and --restore can find it.
+record_trashed() {
+	local i=0 f trashed
+	for f in "$@"; do
+		if [ -n "${remembered_inodes[$i]}" ] && [ ! -e "$f" ] && [ ! -L "$f" ]; then
+			trashinfo_zap_device=${remembered_devices[$i]}
+			trashinfo_zap_inode=${remembered_inodes[$i]}
+			trashinfo_zap_mtime=${remembered_mtimes[$i]}
+			trashinfo_zap_size=${remembered_sizes[$i]}
+			if trashed=$(find_zap_trashed_file); then
+				write_zap_record "$f" "${trashed%/}"
+			else
+				echo "zap: Warning: couldn't find '$f' in the trash, so it won't be restorable with --restore" >&2
+				warn_full_disk_access
+			fi
+		fi
+		i=$((i + 1))
+	done
+}
+
+# write_zap_record ORIGINALPATH TRASHEDPATH
+# Writes a record for an item that has been moved from ORIGINALPATH to TRASHEDPATH.
+write_zap_record() {
+	local thedate
+	if ! file_identity "$2"; then
+		echo "zap: Warning: couldn't stat '$2', so '$1' won't be restorable with --restore" >&2
+		return 1
+	fi
+	thedate=$(date +"%Y-%m-%dT%H:%M:%S")
+	if ! {
+		mkdir -p "$zap_recorddir/info" &&
+		write_trashinfo "$zap_recorddir" "$(mybasename "$1")" "$thedate" "$(
+			printf '[Trash Info]\nPath=%s\nDeletionDate=%s\n' "$(urlencode "$1")" "$thedate"
+			printf 'X-Zap-Strategy=%s\nX-Zap-TrashedPath=%s\n' "$ZAP_STRATEGY" "$(urlencode "$2")"
+			printf 'X-Zap-Device=%s\nX-Zap-Inode=%s\nX-Zap-Mtime=%s\nX-Zap-Size=%s' \
+				"$identity_device" "$identity_inode" "$identity_mtime" "$identity_size"
+		)" >/dev/null
+	}; then
+		echo "zap: Warning: couldn't write a record for '$1' in '$zap_recorddir/info', so it won't be restorable with --restore" >&2
+		return 1
+	fi
+}
+
+# On macOS, reading ~/.Trash requires Full Disk Access.
+warn_full_disk_access() {
+	if [ "$(uname -s)" = Darwin ] && [ -d "$HOME/.Trash" ] && ! ls "$HOME/.Trash" >/dev/null 2>&1; then
+		echo "zap: Hint: your terminal may need Full Disk Access (System Settings > Privacy & Security) to read '$HOME/.Trash'" >&2
+	fi
 }
 
 # Prints DELETIONDATE<TAB>ORIGINALPATH for every trashed item, oldest first.
@@ -834,7 +905,13 @@ case "$ZAP_STRATEGY" in
 		applescript_list="${applescript_list%, }"
 		command="tell app \"Finder\" to delete every item of {$applescript_list}"
 		[ -z "$verbose" ] || echo "$command" >&2
-		[ -n "$dry_run" ] || osascript -e "$command" >/dev/null
+		if [ -z "$dry_run" ]; then
+			remember_identities "$@"
+			status=0
+			osascript -e "$command" >/dev/null || status=$?
+			record_trashed "$@"
+			[ "$status" -eq 0 ] || exit "$status"
+		fi
 		;;
 
 	macos_mv)
@@ -851,7 +928,15 @@ case "$ZAP_STRATEGY" in
 				dest_filename="$dest_filename $(date +"%Y-%m-%dT%H:%M:%S")"
 			done
 			[ -z "$verbose" ] || echo mv -i "'$file'" "'$trash/$dest_filename'" '</dev/null' >&2
-			[ -n "$dry_run" ] || mv -i "$file" "$trash/$dest_filename" </dev/null
+			if [ -z "$dry_run" ]; then
+				if mv -i "$file" "$trash/$dest_filename" </dev/null; then
+					write_zap_record "$file" "$trash/$dest_filename" || :
+				else
+					echo "zap: Failed to move '$file' to the trash" >&2
+					[ -n "$force" ] || exit 1
+					failed=1
+				fi
+			fi
 		done
 		;;
 
@@ -864,7 +949,13 @@ case "$ZAP_STRATEGY" in
 		[ -z "$verbose" ] || echo /usr/bin/trash "${options[@]}" "$@" >&2
 		# /usr/bin/trash doesn't support `--`, but that should be fine because we're
 		# using absolute paths.
-		[ -n "$dry_run" ] || /usr/bin/trash "${options[@]}" "$@"
+		if [ -z "$dry_run" ]; then
+			remember_identities "$@"
+			status=0
+			/usr/bin/trash "${options[@]}" "$@" || status=$?
+			record_trashed "$@"
+			[ "$status" -eq 0 ] || exit "$status"
+		fi
 		;;
 
 	gio)
