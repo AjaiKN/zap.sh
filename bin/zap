@@ -162,15 +162,27 @@ can_move_to() {
 	destdir="$1"
 	shift
 
-	local file
+	local file path
 	for file in "$@"; do
 		# If the file and destination directory aren't on the same filesystem, then
 		# mv will need to copy instead of rename. In order to copy, we need to read
-		# the file.
+		# everything, and in order to remove the original afterwards, we need to be
+		# able to modify every directory.
 		# (Symlinks are moved as-is, so their targets don't need to be readable.)
-		if [ ! -L "$file" ] && ! is_same_filesystem "$file" "$destdir" && ! can_read_file "$file"; then
-			return 1
+		if [ -L "$file" ] || is_same_filesystem "$file" "$destdir"; then
+			continue
 		fi
+		while IFS= read -r -d '' path; do
+			[ ! -L "$path" ] || continue
+			if ! can_read_file "$path"; then
+				echo "zap: Can't trash '$file': it has to be copied to '$destdir' on another filesystem, but '$path' isn't readable" >&2
+				return 1
+			fi
+			if [ -d "$path" ] && { [ ! -w "$path" ] || [ ! -x "$path" ]; }; then
+				echo "zap: Can't trash '$file': it has to be copied to '$destdir' on another filesystem, but the directory '$path' isn't writable, so the original couldn't be removed afterwards" >&2
+				return 1
+			fi
+		done < <(find "$file" -print0 2>/dev/null)
 	done
 }
 
@@ -848,7 +860,6 @@ preflight_check() {
 	[ -n "$2" ] || return 0
 	check_not_trash_sub_or_super_directory "$1" "$2" || return 1
 	if [ -d "$2" ] && ! can_move_to "$2" "$1"; then
-		echo "zap: Can't trash '$1': it's on a different filesystem from '$2' and isn't readable, so it can't be copied" >&2
 		return 1
 	fi
 }
