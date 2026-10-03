@@ -348,7 +348,6 @@ interactive=1
 # permissions, since:
 # 1. sudo changes $HOME to /root and unsets $XDG_DATA_HOME on Linux, and
 # 2. we probably don't want unmovable stuff in our user trash
-# TODO: add --strategy option
 while [[ $# -gt 0 ]]; do
 	opt="$1"
 	case "$1" in
@@ -399,12 +398,21 @@ Try '$0 --help' for more information."
 			exit 5
 			;;
 		(--strategy|-s)
+			if [[ $# -lt 2 ]]; then
+				echo "zap: option '$1' requires an argument" >&2
+				exit 2
+			fi
 			ZAP_STRATEGY="$2"
 			shift
 			shift
 			;;
 		(--strategy=*)
 			arg=${1#--strategy=}
+			shift
+			set -- --strategy "$arg" "$@"
+			;;
+		(-s?*) # -sSTRATEGY
+			arg=${1#-s}
 			shift
 			set -- --strategy "$arg" "$@"
 			;;
