@@ -192,6 +192,24 @@ stat_device() {
 		return 2
 	fi
 }
+stat_inode() {
+	if [ "$stattype" = gnu ]; then
+		stat -c %i "$1"
+	elif [ "$stattype" = bsd ]; then
+		stat -f %i "$1"
+	else
+		return 2
+	fi
+}
+stat_size() {
+	if [ "$stattype" = gnu ]; then
+		stat -c %s "$1"
+	elif [ "$stattype" = bsd ]; then
+		stat -f %z "$1"
+	else
+		return 2
+	fi
+}
 stat_mtime() {
 	if [ "$stattype" = gnu ]; then
 		stat -c %Y "$1"
@@ -364,17 +382,28 @@ get_freedesktop_trashdirs() {
 }
 
 # read_trashinfo TRASHDIR INFOFILE
-# Sets $trashinfo_path (absolute, decoded) and $trashinfo_date.
+# Sets $trashinfo_path (absolute, decoded) and $trashinfo_date, plus the
+# $trashinfo_zap_* variables from zap's own X-Zap-* keys (empty if absent).
 read_trashinfo() {
 	local trashdir="$1" line in_section=
 	trashinfo_path=
 	trashinfo_date=
+	trashinfo_zap_trashed_path=
+	trashinfo_zap_device=
+	trashinfo_zap_inode=
+	trashinfo_zap_mtime=
+	trashinfo_zap_size=
 	while IFS= read -r line || [ -n "$line" ]; do
 		case "$line" in
 			('[Trash Info]') in_section=1 ;;
 			('['*) in_section= ;;
 			(Path=*) [ -z "$in_section" ] || trashinfo_path=$(urldecode "${line#Path=}") ;;
 			(DeletionDate=*) [ -z "$in_section" ] || trashinfo_date=${line#DeletionDate=} ;;
+			(X-Zap-TrashedPath=*) [ -z "$in_section" ] || trashinfo_zap_trashed_path=$(urldecode "${line#*=}") ;;
+			(X-Zap-Device=*) [ -z "$in_section" ] || trashinfo_zap_device=${line#*=} ;;
+			(X-Zap-Inode=*) [ -z "$in_section" ] || trashinfo_zap_inode=${line#*=} ;;
+			(X-Zap-Mtime=*) [ -z "$in_section" ] || trashinfo_zap_mtime=${line#*=} ;;
+			(X-Zap-Size=*) [ -z "$in_section" ] || trashinfo_zap_size=${line#*=} ;;
 		esac
 	done <"$2"
 	[ -n "$trashinfo_path" ] || return 1
@@ -388,28 +417,110 @@ read_trashinfo() {
 	fi
 }
 
-# Prints DELETIONDATE<TAB>ORIGINALPATH for every trashed item, oldest first.
-list_freedesktop_trash() {
-	local trashdir info
-	get_freedesktop_trashdirs | while IFS= read -r trashdir; do
+# Where zap keeps its own .trashinfo records, for files trashed with strategies
+# that don't write any themselves (e.g. on macOS).
+zap_recorddir="${XDG_DATA_HOME:-$HOME/.local/share}/zap"
+
+# Sets $identity_device, $identity_inode, $identity_mtime and $identity_size
+# for FILE (without following symlinks).
+file_identity() {
+	identity_device=$(stat_device "$1") &&
+		identity_inode=$(stat_inode "$1") &&
+		identity_mtime=$(stat_mtime "$1") &&
+		identity_size=$(stat_size "$1")
+}
+
+# Whether FILE is the file described by the $trashinfo_zap_* variables.
+# (Moving a directory can change its mtime and size, so only the device and
+# inode are compared for directories.)
+identity_matches() {
+	{ [ -e "$1" ] || [ -L "$1" ]; } && file_identity "$1" || return 1
+	[ "$identity_device" = "$trashinfo_zap_device" ] && [ "$identity_inode" = "$trashinfo_zap_inode" ] || return 1
+	[ -d "$1" ] && [ ! -L "$1" ] && return 0
+	[ "$identity_mtime" = "$trashinfo_zap_mtime" ] && [ "$identity_size" = "$trashinfo_zap_size" ]
+}
+
+# Prints the path of the item at the top level of one of the misc trash
+# directories matching the $trashinfo_zap_* variables.
+find_zap_trashed_file() {
+	local dir f
+	while IFS= read -r dir; do
+		for f in "$dir"/* "$dir"/.[!.]* "$dir"/..?*; do
+			if identity_matches "$f"; then
+				printf '%s/' "$f"
+				return
+			fi
+		done
+	done < <(get_misc_trashdirs)
+	return 1
+}
+
+# each_trash_entry CALLBACK
+# Calls CALLBACK once for every trashed item that can be found, whether in a
+# freedesktop.org trash directory or recorded by zap, with these set:
+#   $entry_date      deletion date
+#   $entry_path      original path
+#   $entry_location  where the item currently is in the trash
+#   $entry_info      its .trashinfo file
+each_trash_entry() {
+	local trashdir info name
+	while IFS= read -r trashdir; do
 		for info in "$trashdir"/info/*.trashinfo; do
 			[ -f "$info" ] || continue
 			read_trashinfo "$trashdir" "$info" || continue
-			printf '%s\t%s\n' "$trashinfo_date" "$trashinfo_path"
+			name=$(mybasename "$info")
+			entry_location="$trashdir/files/${name%.trashinfo}"
+			[ -e "$entry_location" ] || [ -L "$entry_location" ] || continue
+			entry_date=$trashinfo_date
+			entry_path=$trashinfo_path
+			entry_info=$info
+			"$1"
 		done
-	done | LC_ALL=C sort -s -t "$(printf '\t')" -k1,1
+	done < <(get_freedesktop_trashdirs)
+
+	for info in "$zap_recorddir"/info/*.trashinfo; do
+		[ -f "$info" ] || continue
+		read_trashinfo "$zap_recorddir" "$info" || continue
+		if [ -n "$trashinfo_zap_trashed_path" ] && identity_matches "$trashinfo_zap_trashed_path"; then
+			entry_location=$trashinfo_zap_trashed_path
+		elif entry_location=$(find_zap_trashed_file); then
+			entry_location=${entry_location%/}
+		else
+			[ -z "$verbose" ] || echo "zap: Skipping stale record '$info': '$trashinfo_path' is no longer in the trash" >&2
+			continue
+		fi
+		entry_date=$trashinfo_date
+		entry_path=$trashinfo_path
+		entry_info=$info
+		"$1"
+	done
+}
+
+# Prints DELETIONDATE<TAB>ORIGINALPATH for every trashed item, oldest first.
+list_trash() {
+	# shellcheck disable=SC2329 # called by each_trash_entry
+	print_entry() {
+		printf '%s\t%s\n' "$entry_date" "$entry_path"
+	}
+	each_trash_entry print_entry | LC_ALL=C sort -s -t "$(printf '\t')" -k1,1
 }
 
 get_misc_trashdirs() {
+	local dir
 	{
-		ls -d "$HOME"/{.Trash,.trash,trash,Trash,.gomi} 2>/dev/null || :
-		ls -d /Volumes/*/.Trashes/* 2>/dev/null || :
-
-		local mountpoint dir
-		list_mountpoints | while IFS= read -r mountpoint; do
-			ls -d "$mountpoint"/.Trashes/* 2>/dev/null || :
+		for dir in "$HOME"/{.Trash,.trash,trash,Trash,.gomi} /Volumes/*/.Trashes/*; do
+			[ ! -d "$dir" ] || printf '%s\n' "$dir"
 		done
-	} | xargs realpath 2>/dev/null | sort | uniq
+
+		local mountpoint
+		list_mountpoints | while IFS= read -r mountpoint; do
+			for dir in "$mountpoint"/.Trashes/*; do
+				[ ! -d "$dir" ] || printf '%s\n' "$dir"
+			done
+		done
+	} | while IFS= read -r dir; do
+		(cd "$dir" 2>/dev/null && pwd -P) || :
+	done | sort -u
 }
 
 ## Parse options
@@ -579,38 +690,34 @@ if [ "$action" = list ]; then
 		echo "zap: --list doesn't take any arguments" >&2
 		exit 2
 	fi
-	list_freedesktop_trash
+	list_trash
 	exit
 fi
 
 restore_one() {
-	local target trashdir info name best_info='' best_trashdir='' best_date=''
+	local target best_info='' best_location='' best_date=''
 	target=$(get_abs_filename "$1") || return 1
-	while IFS= read -r trashdir; do
-		for info in "$trashdir"/info/*.trashinfo; do
-			[ -f "$info" ] || continue
-			read_trashinfo "$trashdir" "$info" || continue
-			if [ "$trashinfo_path" = "$target" ] && ! [[ $trashinfo_date < $best_date ]]; then
-				best_info=$info
-				best_trashdir=$trashdir
-				best_date=$trashinfo_date
-			fi
-		done
-	done < <(get_freedesktop_trashdirs)
+	# shellcheck disable=SC2329 # called by each_trash_entry
+	consider_entry() {
+		if [ "$entry_path" = "$target" ] && ! [[ $entry_date < $best_date ]]; then
+			best_info=$entry_info
+			best_location=$entry_location
+			best_date=$entry_date
+		fi
+	}
+	each_trash_entry consider_entry
 
 	if [ -z "$best_info" ]; then
 		echo "zap: '$target' was not found in the trash" >&2
 		return 1
 	fi
-	name=$(mybasename "$best_info")
-	name=${name%.trashinfo}
 	if [ -e "$target" ] || [ -L "$target" ]; then
 		echo "zap: Can't restore '$target': it already exists" >&2
 		return 1
 	fi
-	[ -z "$verbose" ] || echo mv -i "'$best_trashdir/files/$name'" "'$target'" '</dev/null' >&2
+	[ -z "$verbose" ] || echo mv -i "'$best_location'" "'$target'" '</dev/null' >&2
 	if [ -z "$dry_run" ]; then
-		mv -i "$best_trashdir/files/$name" "$target" </dev/null || return 1
+		mv -i "$best_location" "$target" </dev/null || return 1
 		command rm -f -- "$best_info"
 	fi
 	printf '%s\n' "$target"
