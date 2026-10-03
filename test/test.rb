@@ -238,10 +238,18 @@ class TestZap < Minitest::Test
 		end
 	end
 
-	def test_list_unsupported_strategy
-		strategy "dangerous_rm"
-		system "zap", "--list", out: File::NULL, err: File::NULL
-		assert_equal 1, $?.exitstatus
+	def test_list_and_restore_ignore_strategy
+		with_isolated_trash do
+			strategy "freedesktop"
+			File.write "a.txt", "a"
+			system "zap", "--", "a.txt", out: File::NULL, exception: true
+			strategy "dangerous_rm"
+			listing = `zap --list`.b
+			assert $?.success?
+			assert listing.lines.any? { _1.end_with?("\t#{FileUtils.pwd}/a.txt\n".b) }
+			system "zap", "--restore", "--", "a.txt", out: File::NULL, exception: true
+			assert_equal "a", File.read("a.txt")
+		end
 	end
 
 	def test_restore_round_trip

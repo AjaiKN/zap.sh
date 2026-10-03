@@ -719,41 +719,11 @@ if [[ $# -eq 0 ]] && [ -z $force ] && [ "$action" = put ]; then
 	exit 2
 fi
 
-## Choose strategy
-
-choose_strategy() {
-	UNAME=$(command -v uname) || exit 2 # https://gist.github.com/prabirshrestha/3080525?permalink_comment_id=2962265#gistcomment-2962265
-	case $("${UNAME}" | tr '[:upper:]' '[:lower:]') in
-		(msys*|cygwin*|mingw*|nt|win*)
-			echo "Windows isn't currently supported!" >&2
-			return 1
-	esac
-
-	if [ "$(uname -s)" = "Darwin" ]; then
-		if [ -x /usr/bin/trash ]; then
-			# introduced in macOS 14.0
-			echo macos_trash_command
-			return
-		elif command -v osascript >/dev/null 2>&1; then
-			echo macos_applescript
-			return
-		fi
-	fi
-
-	echo freedesktop
-	return
-}
-
-ZAP_STRATEGY=${ZAP_STRATEGY:-$(choose_strategy)}
-[ -n "$verbose" ] && echo "Using strategy: $ZAP_STRATEGY" >&2
-
 ## List / restore
 
+# These look in every trash location zap knows about, regardless of strategy.
 if [ "$action" = list ] || [ "$action" = restore ]; then
-	if [ "$ZAP_STRATEGY" != freedesktop ]; then
-		echo "zap: --$action is not supported for strategy '$ZAP_STRATEGY'" >&2
-		exit 1
-	fi
+	warn_full_disk_access
 fi
 
 if [ "$action" = list ]; then
@@ -808,6 +778,34 @@ if [ "$action" = restore ]; then
 	[ -z "$failed" ] || exit 1
 	exit
 fi
+
+## Choose strategy
+
+choose_strategy() {
+	UNAME=$(command -v uname) || exit 2 # https://gist.github.com/prabirshrestha/3080525?permalink_comment_id=2962265#gistcomment-2962265
+	case $("${UNAME}" | tr '[:upper:]' '[:lower:]') in
+		(msys*|cygwin*|mingw*|nt|win*)
+			echo "Windows isn't currently supported!" >&2
+			return 1
+	esac
+
+	if [ "$(uname -s)" = "Darwin" ]; then
+		if [ -x /usr/bin/trash ]; then
+			# introduced in macOS 14.0
+			echo macos_trash_command
+			return
+		elif command -v osascript >/dev/null 2>&1; then
+			echo macos_applescript
+			return
+		fi
+	fi
+
+	echo freedesktop
+	return
+}
+
+ZAP_STRATEGY=${ZAP_STRATEGY:-$(choose_strategy)}
+[ -n "$verbose" ] && echo "Using strategy: $ZAP_STRATEGY" >&2
 
 ## Checks
 files=()
