@@ -198,8 +198,8 @@ stat_mtime() {
 # FILE should be an absolute path.
 mountpoint_of() {
 	local path
-	# canonicalize
-	path=$(cd "$1" 2>/dev/null && pwd -P) || return 2
+	# canonicalize (FILE might not be a directory, so use its parent)
+	path=$(cd "$(mydirname "$1")" 2>/dev/null && pwd -P) || return 2
 
 	mountpoint_of___helper "$path" ||
 		# fallback: use df (POSIX df -P if available). Prints mountpoint column from df.
