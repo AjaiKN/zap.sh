@@ -96,8 +96,10 @@ class TestZap < Minitest::Test
 
 	## Mount a fresh tmpfs (a different filesystem from the home trash, with no
 	## usable top-level trash directory) and yield a directory in it owned by the
-	## current user. Skips the test if passwordless sudo isn't available.
+	## current user. Skips the test if not on Linux or if passwordless sudo isn't
+	## available.
 	def with_tmpfs
+		skip "tmpfs tests only run on Linux" unless RUBY_PLATFORM =~ /linux/
 		skip "running as root" if Process.uid == 0
 		skip "needs passwordless sudo to mount a tmpfs" unless system "sudo", "-n", "true", out: File::NULL, err: File::NULL
 		mktmpdir_home do |mnt|
