@@ -7,6 +7,13 @@ brew install ajaikn/tap/zap.sh
 *** Manual
 - Copy or symlink =bin/zap= into a directory on your PATH.
 - To install zsh completions /(optional)/: copy =completions/zsh/_zap= into your zsh completions directory, or source =zap.plugin.zsh=.
+** Behaviour compared with =rm=
+=zap= accepts the same flags as =rm= and tries to behave like it, but a little more strictly:
+- *Fail fast.* Before trashing anything, =zap= checks every argument: that it exists, that it can be moved (e.g. its parent directory is writable), that it isn't inside or around the trash directory, and, when it has to be copied to the trash on another filesystem, that everything inside it is readable and every directory inside it is writable. If any argument fails, nothing is trashed.
+- *Refuse where =rm= would prompt.* =rm= asks before deleting a write-protected file when standard input is a terminal (and deletes it without asking otherwise). =zap= refuses either way; use =--force= to override.
+- *=-f= / =--force= works like =rm -f=.* Nonexistent files are silently ignored, write-protected files are trashed anyway, and anything else that can't be trashed is reported and skipped while the rest are still trashed, with exit status 1. =--force= never overrides the trash directory check.
+- =--restore= works the same way: every argument is checked before anything is restored.
+
 ** Restoring on macOS
 macOS doesn't record where trashed files came from in a form other tools can read, so when zap trashes something with one of the =macos_*= strategies, it writes its own record (a =.trashinfo= file with extra =X-Zap-*= keys) to =$XDG_DATA_HOME/zap/info= (default =~/.local/share/zap/info=). =zap --list= and =zap --restore= use these records, so they only know about files that zap itself trashed.
 
@@ -19,12 +26,12 @@ Usage: zap [OPTION]... [--] FILE...
 Put each FILE in the trash. Currently supports macOS and Linux.
 
   -h, --help               Show this usage message.
-  -f, --force              Override non-writable files, and ignore nonexistent or otherwise untrashable files.
-                           If any of the files are owned by the current user but don't have write permissions,
-                           delete them anyway. If any of the files are nonexistent, or if we can't trash them
-                           (because their directories aren't writable and executable), ignore them and still
-                           trash everything else. (Otherwise, this command will refuse to do anything if any
-                           of the arguments are untrashable.)
+  -f, --force              Override non-writable files, ignore nonexistent files, and skip untrashable ones.
+                           Like rm -f: files that don't have write permissions are trashed anyway, nonexistent
+                           files are silently ignored, and files that can't be trashed (e.g. because their
+                           directories aren't writable) are reported and skipped while everything else is
+                           still trashed, in which case the exit status is 1. Without --force, this command
+                           refuses to do anything if any of the arguments would fail to be trashed.
   -n, --dry-run            Don't actually trash anything; just print what this command *would* do.
                            This option implies --verbose.
   -v, --verbose            Be more verbose.

@@ -18,12 +18,12 @@ Put each FILE in the trash. Currently supports macOS and Linux.
 Show this usage message.
 .TP
 \fB\-f\fR, \fB\-\-force\fR
-Override non\-writable files, and ignore nonexistent or otherwise untrashable files.
-If any of the files are owned by the current user but don't have write permissions,
-delete them anyway. If any of the files are nonexistent, or if we can't trash them
-(because their directories aren't writable and executable), ignore them and still
-trash everything else. (Otherwise, this command will refuse to do anything if any
-of the arguments are untrashable.)
+Override non\-writable files, ignore nonexistent files, and skip untrashable ones.
+Like rm \fB\-f\fR: files that don't have write permissions are trashed anyway, nonexistent
+files are silently ignored, and files that can't be trashed (e.g. because their
+directories aren't writable) are reported and skipped while everything else is
+still trashed, in which case the exit status is 1. Without \fB\-\-force\fR, this command
+refuses to do anything if any of the arguments would fail to be trashed.
 .TP
 \fB\-n\fR, \fB\-\-dry\-run\fR
 Don't actually trash anything; just print what this command *would* do.
