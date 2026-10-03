@@ -353,6 +353,7 @@ interactive=1
 # permissions, since:
 # 1. sudo changes $HOME to /root and unsets $XDG_DATA_HOME on Linux, and
 # 2. we probably don't want unmovable stuff in our user trash
+# shellcheck disable=SC2034 # $interactive isn't used until -i/-I are implemented
 while [[ $# -gt 0 ]]; do
 	opt="$1"
 	case "$1" in
