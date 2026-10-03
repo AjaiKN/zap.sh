@@ -966,7 +966,7 @@ for file in "$@"; do
 		trashdirs+=("$trash")
 	fi
 done
-set -- "${files[@]}"
+set -- ${files[@]+"${files[@]}"}
 
 for file in "$@"; do
 	echo "$file"
@@ -1065,13 +1065,13 @@ case "$ZAP_STRATEGY" in
 		options=()
 		[ -n "$force"   ] || options+=(--stopOnError)
 		[ -z "$verbose" ] || options+=(--verbose)
-		[ -z "$verbose" ] || echo /usr/bin/trash "${options[@]}" "$@" >&2
+		[ -z "$verbose" ] || echo /usr/bin/trash ${options[@]+"${options[@]}"} "$@" >&2
 		# /usr/bin/trash doesn't support `--`, but that should be fine because we're
 		# using absolute paths.
 		if [ -z "$dry_run" ]; then
 			remember_identities "$@"
 			status=0
-			/usr/bin/trash "${options[@]}" "$@" || status=$?
+			/usr/bin/trash ${options[@]+"${options[@]}"} "$@" || status=$?
 			record_trashed "$@"
 			[ "$status" -eq 0 ] || exit "$status"
 		fi
@@ -1088,15 +1088,15 @@ case "$ZAP_STRATEGY" in
 		# https://www.inmotionhosting.com/support/server/linux/send-files-to-trash-with-gio-trash/
 		options=()
 		[ -z "$force"   ] || options+=(--force)
-		[ -z "$verbose" ] || echo gio trash "${options[@]}" -- "$@" >&2
-		[ -n "$dry_run" ] || gio trash "${options[@]}" -- "$@"
+		[ -z "$verbose" ] || echo gio trash ${options[@]+"${options[@]}"} -- "$@" >&2
+		[ -n "$dry_run" ] || gio trash ${options[@]+"${options[@]}"} -- "$@"
 		;;
 
 	kioclient)
 		pre_options=(--noninteractive --platform offscreen)
 		options=()
-		[ -z "$verbose" ] || echo kioclient "${pre_options[@]}" move "${options[@]}" -- "$@" trash:/ >&2
-		[ -n "$dry_run" ] || kioclient "${pre_options[@]}" move "${options[@]}" -- "$@" trash:/
+		[ -z "$verbose" ] || echo kioclient ${pre_options[@]+"${pre_options[@]}"} move ${options[@]+"${options[@]}"} -- "$@" trash:/ >&2
+		[ -n "$dry_run" ] || kioclient ${pre_options[@]+"${pre_options[@]}"} move ${options[@]+"${options[@]}"} -- "$@" trash:/
 		;;
 
 	trash_cli)
@@ -1104,18 +1104,18 @@ case "$ZAP_STRATEGY" in
 		options=()
 		[ -z "$force"   ] || options+=(--force)
 		[ -z "$verbose" ] || options+=(--verbose)
-		[ -z "$verbose" ] || echo trash-put "${options[@]}" -- "$@" >&2
-		[ -n "$dry_run" ] || trash-put "${options[@]}" -- "$@"
+		[ -z "$verbose" ] || echo trash-put ${options[@]+"${options[@]}"} -- "$@" >&2
+		[ -n "$dry_run" ] || trash-put ${options[@]+"${options[@]}"} -- "$@"
 		;;
 
 	dangerous_rm)
 		# https://pubs.opengroup.org/onlinepubs/9699919799/utilities/rm.html
 		options=(-f)
 		# [ -z "$force"   ] || options+=(-f)
-		[ -z "$verbose" ] || echo rm "${options[@]}" "$@" >&2
+		[ -z "$verbose" ] || echo rm ${options[@]+"${options[@]}"} "$@" >&2
 		# POSIX rm doesn't support `--` (though GNU and BSD rm both do), but that
 		# should be fine because we're using absolute paths.
-		[ -n "$dry_run" ] || rm "${options[@]}" "$@"
+		[ -n "$dry_run" ] || rm ${options[@]+"${options[@]}"} "$@"
 		;;
 
 	dangerous_shred)
@@ -1123,8 +1123,8 @@ case "$ZAP_STRATEGY" in
 		options=(--remove --zero --force)
 		# [ -z "$force"   ] || options+=(--force)
 		[ -z "$verbose" ] || options+=(--verbose)
-		[ -z "$verbose" ] || echo shred "${options[@]}" -- "$@" >&2
-		[ -n "$dry_run" ] || shred "${options[@]}" -- "$@"
+		[ -z "$verbose" ] || echo shred ${options[@]+"${options[@]}"} -- "$@" >&2
+		[ -n "$dry_run" ] || shred ${options[@]+"${options[@]}"} -- "$@"
 		;;
 
 	*)
