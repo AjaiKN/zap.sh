@@ -95,8 +95,8 @@ urlencode() {
 can_delete_file() {
 	# File must exist.
 	# (If it's a broken symlink, -e will return false, but -L will return true.)
-	if [ ! -e "$1" ] && [ ! -L "$file" ]; then
-		echo "zap: File '$file' does not exist" >&2
+	if [ ! -e "$1" ] && [ ! -L "$1" ]; then
+		echo "zap: File '$1' does not exist" >&2
 		return 1
 	fi
 	# If we're the superuser, we can always delete.
@@ -107,7 +107,7 @@ can_delete_file() {
 	local dir
 	dir=$(mydirname "$1") || return 1
 	if [ ! -w "$dir" ] || [ ! -x "$dir" ]; then
-		echo "Cannot zap '$file' because we don't have write and execute permissions on its parent directory '$(mydirname "$file")'" >&2
+		echo "Cannot zap '$1' because we don't have write and execute permissions on its parent directory '$dir'" >&2
 		return 1
 	fi
 }
@@ -123,7 +123,7 @@ is_writable_by_current_user() {
 	fi
 	# Check if writable.
 	if [ ! -w "$1" ]; then
-		echo "zap: The file '$file' is not writable by the current user. Use --force to override." >&2
+		echo "zap: The file '$1' is not writable by the current user. Use --force to override." >&2
 		return 1
 	fi
 }
@@ -348,7 +348,6 @@ interactive=1
 # permissions, since:
 # 1. sudo changes $HOME to /root and unsets $XDG_DATA_HOME on Linux, and
 # 2. we probably don't want unmovable stuff in our user trash
-# TODO: add --strategy option
 while [[ $# -gt 0 ]]; do
 	opt="$1"
 	case "$1" in
@@ -390,7 +389,7 @@ while [[ $# -gt 0 ]]; do
 			;;
 		(--interactive=*)
 			# message from GNU rm
-			echo "zap: ambiguous argument ‘$1’
+			echo >&2 "zap: ambiguous argument ‘$1’
 Valid arguments for ‘--interactive’ are:
   - ‘never’, ‘no’, ‘none’
   - ‘once’
@@ -399,12 +398,21 @@ Try '$0 --help' for more information."
 			exit 5
 			;;
 		(--strategy|-s)
+			if [[ $# -lt 2 ]]; then
+				echo "zap: option '$1' requires an argument" >&2
+				exit 2
+			fi
 			ZAP_STRATEGY="$2"
 			shift
 			shift
 			;;
 		(--strategy=*)
 			arg=${1#--strategy=}
+			shift
+			set -- --strategy "$arg" "$@"
+			;;
+		(-s?*) # -sSTRATEGY
+			arg=${1#-s}
 			shift
 			set -- --strategy "$arg" "$@"
 			;;
@@ -507,10 +515,10 @@ check_not_trash_sub_or_super_directory() {
 			if [ ! -L "$file" ]; then
 				file_realpath="$(realpath "$file")" || exit 2
 				if [[ "$file_realpath"/ == "$trash_realpath"/* ]]; then
-					echo "Error: '$file_realpath' is a subdirectory of the trash directory '$trash_realpath'"
+					echo "Error: '$file_realpath' is a subdirectory of the trash directory '$trash_realpath'" >&2
 					exit 1
 				elif [[ "$trash_realpath"/ == "$file_realpath"/* ]]; then
-					echo "Error: '$file_realpath' is a superdirectory of the trash directory '$trash_realpath'"
+					echo "Error: '$file_realpath' is a superdirectory of the trash directory '$trash_realpath'" >&2
 					exit 1
 				fi
 			fi
@@ -567,7 +575,7 @@ case "$ZAP_STRATEGY" in
 		# remove trailing comma and space
 		applescript_list="${applescript_list%, }"
 		command="tell app \"Finder\" to delete every item of {$applescript_list}"
-		echo "$command" >&2
+		[ -z "$verbose" ] || echo "$command" >&2
 		[ -n "$dry_run" ] || osascript -e "$command" >/dev/null
 		;;
 

@@ -177,4 +177,19 @@ class TestZap < Minitest::Test
 		assert File.exist? "#{Dir.home}/.Trash/#{@filename}"
 		assert_equal @contents, File.binread("#{Dir.home}/.Trash/#{@filename}")
 	end
+
+	def test_strategy_missing_argument_fails
+		strategy "freedesktop"
+		out = `zap -s 2>&1`
+		assert_equal 2, $?.exitstatus
+		assert_match(/requires an argument/, out)
+	end
+
+	def test_bundled_strategy_option
+		strategy "freedesktop"
+		out = `zap -nsdangerous_rm -- '#{@filename}' 2>&1`.b
+		assert $?.success?
+		assert_match(/Using strategy: dangerous_rm/, out)
+		assert File.exist? @filename
+	end
 end
