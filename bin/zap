@@ -399,36 +399,37 @@ get_freedesktop_trashdirs() {
 }
 
 # read_trashinfo TRASHDIR INFOFILE
-# Sets $trashinfo_path (absolute, decoded) and $trashinfo_date, plus the
-# $trashinfo_zap_* variables from zap's own X-Zap-* keys (empty if absent).
+# Sets $_ti_path (absolute, decoded) and $_ti_date, plus $_ti_trashed_path and
+# $_ti_identity from zap's own X-Zap-* keys (empty if absent). Only
+# each_trash_entry should use these.
 read_trashinfo() {
-	local trashdir="$1" line in_section=
-	trashinfo_path=
-	trashinfo_date=
-	trashinfo_zap_trashed_path=
-	trashinfo_zap_device=
-	trashinfo_zap_inode=
-	trashinfo_zap_mtime=
-	trashinfo_zap_size=
+	local trashdir="$1" line in_section='' device='' inode='' mtime='' size=''
+	_ti_path=
+	_ti_date=
+	_ti_trashed_path=
+	_ti_identity=
 	while IFS= read -r line || [ -n "$line" ]; do
 		case "$line" in
 			('[Trash Info]') in_section=1 ;;
 			('['*) in_section= ;;
-			(Path=*) [ -z "$in_section" ] || trashinfo_path=$(urldecode "${line#Path=}") ;;
-			(DeletionDate=*) [ -z "$in_section" ] || trashinfo_date=${line#DeletionDate=} ;;
-			(X-Zap-TrashedPath=*) [ -z "$in_section" ] || trashinfo_zap_trashed_path=$(urldecode "${line#*=}") ;;
-			(X-Zap-Device=*) [ -z "$in_section" ] || trashinfo_zap_device=${line#*=} ;;
-			(X-Zap-Inode=*) [ -z "$in_section" ] || trashinfo_zap_inode=${line#*=} ;;
-			(X-Zap-Mtime=*) [ -z "$in_section" ] || trashinfo_zap_mtime=${line#*=} ;;
-			(X-Zap-Size=*) [ -z "$in_section" ] || trashinfo_zap_size=${line#*=} ;;
+			(Path=*) [ -z "$in_section" ] || _ti_path=$(urldecode "${line#Path=}") ;;
+			(DeletionDate=*) [ -z "$in_section" ] || _ti_date=${line#DeletionDate=} ;;
+			(X-Zap-TrashedPath=*) [ -z "$in_section" ] || _ti_trashed_path=$(urldecode "${line#*=}") ;;
+			(X-Zap-Device=*) [ -z "$in_section" ] || device=${line#*=} ;;
+			(X-Zap-Inode=*) [ -z "$in_section" ] || inode=${line#*=} ;;
+			(X-Zap-Mtime=*) [ -z "$in_section" ] || mtime=${line#*=} ;;
+			(X-Zap-Size=*) [ -z "$in_section" ] || size=${line#*=} ;;
 		esac
 	done <"$2"
-	[ -n "$trashinfo_path" ] || return 1
+	if [ -n "$device" ] && [ -n "$inode" ] && [ -n "$mtime" ] && [ -n "$size" ]; then
+		_ti_identity="$device:$inode:$mtime:$size"
+	fi
+	[ -n "$_ti_path" ] || return 1
 	# Paths in top-directory trashes may be relative to the top directory.
-	if [[ $trashinfo_path != /* ]]; then
+	if [[ $_ti_path != /* ]]; then
 		case "$trashdir" in
-			(*/.Trash/"$UID") trashinfo_path="${trashdir%/.Trash/"$UID"}/$trashinfo_path" ;;
-			(*/.Trash-"$UID") trashinfo_path="${trashdir%/.Trash-"$UID"}/$trashinfo_path" ;;
+			(*/.Trash/"$UID") _ti_path="${trashdir%/.Trash/"$UID"}/$_ti_path" ;;
+			(*/.Trash-"$UID") _ti_path="${trashdir%/.Trash-"$UID"}/$_ti_path" ;;
 			(*) return 1 ;;
 		esac
 	fi
@@ -438,32 +439,41 @@ read_trashinfo() {
 # that don't write any themselves (e.g. on macOS).
 zap_recorddir="${XDG_DATA_HOME:-$HOME/.local/share}/zap"
 
-# Sets $identity_device, $identity_inode, $identity_mtime and $identity_size
-# for FILE (without following symlinks).
+# file_identity FILE
+# Prints FILE's identity (without following symlinks), as
+# DEVICE:INODE:MTIME:SIZE.
 file_identity() {
-	identity_device=$(stat_device "$1") &&
-		identity_inode=$(stat_inode "$1") &&
-		identity_mtime=$(stat_mtime "$1") &&
-		identity_size=$(stat_size "$1")
+	local device inode mtime size
+	device=$(stat_device "$1") &&
+		inode=$(stat_inode "$1") &&
+		mtime=$(stat_mtime "$1") &&
+		size=$(stat_size "$1") &&
+		printf '%s\n' "$device:$inode:$mtime:$size"
 }
 
-# Whether FILE is the file described by the $trashinfo_zap_* variables.
+# identity_matches FILE IDENTITY
+# Whether FILE has the identity IDENTITY (as printed by file_identity).
 # (Moving a directory can change its mtime and size, so only the device and
 # inode are compared for directories.)
 identity_matches() {
-	{ [ -e "$1" ] || [ -L "$1" ]; } && file_identity "$1" || return 1
-	[ "$identity_device" = "$trashinfo_zap_device" ] && [ "$identity_inode" = "$trashinfo_zap_inode" ] || return 1
-	[ -d "$1" ] && [ ! -L "$1" ] && return 0
-	[ "$identity_mtime" = "$trashinfo_zap_mtime" ] && [ "$identity_size" = "$trashinfo_zap_size" ]
+	local id
+	[ -n "$2" ] || return 1
+	{ [ -e "$1" ] || [ -L "$1" ]; } && id=$(file_identity "$1") || return 1
+	if [ -d "$1" ] && [ ! -L "$1" ]; then
+		[ "${id%:*:*}" = "${2%:*:*}" ]
+	else
+		[ "$id" = "$2" ]
+	fi
 }
 
+# find_trashed_by_identity IDENTITY
 # Prints the path of the item at the top level of one of the misc trash
-# directories matching the $trashinfo_zap_* variables.
-find_zap_trashed_file() {
+# directories with the identity IDENTITY.
+find_trashed_by_identity() {
 	local dir f
 	while IFS= read -r dir; do
 		for f in "$dir"/* "$dir"/.[!.]* "$dir"/..?*; do
-			if identity_matches "$f"; then
+			if identity_matches "$f" "$1"; then
 				printf '%s\n' "$f"
 				return
 			fi
@@ -473,91 +483,75 @@ find_zap_trashed_file() {
 }
 
 # each_trash_entry CALLBACK
-# Calls CALLBACK once for every trashed item that can be found, whether in a
-# freedesktop.org trash directory or recorded by zap, with these set:
-#   $entry_date      deletion date
-#   $entry_path      original path
-#   $entry_location  where the item currently is in the trash
-#   $entry_info      its .trashinfo file
+# Calls CALLBACK DATE PATH LOCATION INFO once for every trashed item that can be
+# found, whether in a freedesktop.org trash directory or recorded by zap:
+#   DATE      deletion date
+#   PATH      original path
+#   LOCATION  where the item currently is in the trash
+#   INFO      its .trashinfo file
 each_trash_entry() {
-	local trashdir info name
+	local trashdir info name location
 	while IFS= read -r trashdir; do
 		for info in "$trashdir"/info/*.trashinfo; do
 			[ -f "$info" ] || continue
 			read_trashinfo "$trashdir" "$info" || continue
 			name=$(mybasename "$info")
-			entry_location="$trashdir/files/${name%.trashinfo}"
-			[ -e "$entry_location" ] || [ -L "$entry_location" ] || continue
-			entry_date=$trashinfo_date
-			entry_path=$trashinfo_path
-			entry_info=$info
-			"$1"
+			location="$trashdir/files/${name%.trashinfo}"
+			[ -e "$location" ] || [ -L "$location" ] || continue
+			"$1" "$_ti_date" "$_ti_path" "$location" "$info"
 		done
 	done < <(get_freedesktop_trashdirs)
 
 	for info in "$zap_recorddir"/info/*.trashinfo; do
 		[ -f "$info" ] || continue
 		read_trashinfo "$zap_recorddir" "$info" || continue
-		if [ -n "$trashinfo_zap_trashed_path" ] && identity_matches "$trashinfo_zap_trashed_path"; then
-			entry_location=$trashinfo_zap_trashed_path
-		elif entry_location=$(find_zap_trashed_file); then
+		if [ -n "$_ti_trashed_path" ] && identity_matches "$_ti_trashed_path" "$_ti_identity"; then
+			location=$_ti_trashed_path
+		elif location=$(find_trashed_by_identity "$_ti_identity"); then
 			:
 		else
-			[ -z "$verbose" ] || echo "zap: Skipping stale record '$info': '$trashinfo_path' is no longer in the trash" >&2
+			[ -z "$verbose" ] || echo "zap: Skipping stale record '$info': '$_ti_path' is no longer in the trash" >&2
 			continue
 		fi
-		entry_date=$trashinfo_date
-		entry_path=$trashinfo_path
-		entry_info=$info
-		"$1"
+		"$1" "$_ti_date" "$_ti_path" "$location" "$info"
 	done
 }
 
 # remember_identities FILE...
-# Saves the identity of each FILE, for record_trashed to use after trashing.
+# Prints the identity of each FILE, one per line (an empty line if it can't be
+# determined), for record_trashed to use after trashing.
 remember_identities() {
-	remembered_devices=() remembered_inodes=() remembered_mtimes=() remembered_sizes=()
 	local f
 	for f in "$@"; do
-		if file_identity "$f"; then
-			remembered_devices+=("$identity_device")
-			remembered_inodes+=("$identity_inode")
-			remembered_mtimes+=("$identity_mtime")
-			remembered_sizes+=("$identity_size")
-		else
-			remembered_devices+=('') remembered_inodes+=('') remembered_mtimes+=('') remembered_sizes+=('')
-		fi
+		file_identity "$f" || echo
 	done
 }
 
-# record_trashed FILE...
-# For each FILE (the same list passed to remember_identities) that's no longer
-# at its original path, find it in the trash by its remembered identity and
-# write a record to $zap_recorddir/info so that --list and --restore can find it.
+# record_trashed IDENTITIES FILE...
+# IDENTITIES is the output of remember_identities FILE.... For each FILE that's
+# no longer at its original path, find it in the trash by its identity and write
+# a record to $zap_recorddir/info so that --list and --restore can find it.
 record_trashed() {
-	local i=0 f trashed
+	local identities="$1" f id trashed
+	shift
 	for f in "$@"; do
-		if [ -n "${remembered_inodes[$i]}" ] && [ ! -e "$f" ] && [ ! -L "$f" ]; then
-			trashinfo_zap_device=${remembered_devices[$i]}
-			trashinfo_zap_inode=${remembered_inodes[$i]}
-			trashinfo_zap_mtime=${remembered_mtimes[$i]}
-			trashinfo_zap_size=${remembered_sizes[$i]}
-			if trashed=$(find_zap_trashed_file); then
+		IFS= read -r id || id=
+		if [ -n "$id" ] && [ ! -e "$f" ] && [ ! -L "$f" ]; then
+			if trashed=$(find_trashed_by_identity "$id"); then
 				write_zap_record "$f" "$trashed"
 			else
 				echo "zap: Warning: couldn't find '$f' in the trash, so it won't be restorable with --restore" >&2
 				warn_full_disk_access
 			fi
 		fi
-		i=$((i + 1))
-	done
+	done <<<"$identities"
 }
 
 # write_zap_record ORIGINALPATH TRASHEDPATH
 # Writes a record for an item that has been moved from ORIGINALPATH to TRASHEDPATH.
 write_zap_record() {
-	local thedate
-	if ! file_identity "$2"; then
+	local thedate device inode mtime size
+	if ! IFS=: read -r device inode mtime size < <(file_identity "$2"); then
 		echo "zap: Warning: couldn't stat '$2', so '$1' won't be restorable with --restore" >&2
 		return 1
 	fi
@@ -568,7 +562,7 @@ write_zap_record() {
 			printf '[Trash Info]\nPath=%s\nDeletionDate=%s\n' "$(urlencode "$1")" "$thedate"
 			printf 'X-Zap-Strategy=%s\nX-Zap-TrashedPath=%s\n' "$ZAP_STRATEGY" "$(urlencode "$2")"
 			printf 'X-Zap-Device=%s\nX-Zap-Inode=%s\nX-Zap-Mtime=%s\nX-Zap-Size=%s' \
-				"$identity_device" "$identity_inode" "$identity_mtime" "$identity_size"
+				"$device" "$inode" "$mtime" "$size"
 		)" >/dev/null
 	}; then
 		echo "zap: Warning: couldn't write a record for '$1' in '$zap_recorddir/info', so it won't be restorable with --restore" >&2
@@ -587,7 +581,7 @@ warn_full_disk_access() {
 list_trash() {
 	# shellcheck disable=SC2317,SC2329 # called by each_trash_entry
 	print_entry() {
-		printf '%s\t%s\n' "$entry_date" "$entry_path"
+		printf '%s\t%s\n' "$1" "$2"
 	}
 	each_trash_entry print_entry | LC_ALL=C sort -s -t "$(printf '\t')" -k1,1
 }
@@ -789,10 +783,10 @@ find_restore_candidate() {
 	restore_target=$(get_abs_filename "$1") || return 1
 	# shellcheck disable=SC2317,SC2329 # called by each_trash_entry
 	consider_entry() {
-		if [ "$entry_path" = "$restore_target" ] && ! [[ $entry_date < $best_date ]]; then
-			best_info=$entry_info
-			best_location=$entry_location
-			best_date=$entry_date
+		if [ "$2" = "$restore_target" ] && ! [[ $1 < $best_date ]]; then
+			best_info=$4
+			best_location=$3
+			best_date=$1
 		fi
 	}
 	each_trash_entry consider_entry
@@ -1030,10 +1024,10 @@ case "$ZAP_STRATEGY" in
 		command="tell app \"Finder\" to delete every item of {$applescript_list}"
 		[ -z "$verbose" ] || echo "$command" >&2
 		if [ -z "$dry_run" ]; then
-			remember_identities "$@"
+			ids=$(remember_identities "$@")
 			status=0
 			osascript -e "$command" >/dev/null || status=$?
-			record_trashed "$@"
+			record_trashed "$ids" "$@"
 			[ "$status" -eq 0 ] || exit "$status"
 		fi
 		;;
@@ -1072,10 +1066,10 @@ case "$ZAP_STRATEGY" in
 		# /usr/bin/trash doesn't support `--`, but that should be fine because we're
 		# using absolute paths.
 		if [ -z "$dry_run" ]; then
-			remember_identities "$@"
+			ids=$(remember_identities "$@")
 			status=0
 			/usr/bin/trash ${options[@]+"${options[@]}"} "$@" || status=$?
-			record_trashed "$@"
+			record_trashed "$ids" "$@"
 			[ "$status" -eq 0 ] || exit "$status"
 		fi
 		;;
