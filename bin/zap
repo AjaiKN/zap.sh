@@ -390,7 +390,7 @@ while [[ $# -gt 0 ]]; do
 			;;
 		(--interactive=*)
 			# message from GNU rm
-			echo "zap: ambiguous argument ‘$1’
+			echo >&2 "zap: ambiguous argument ‘$1’
 Valid arguments for ‘--interactive’ are:
   - ‘never’, ‘no’, ‘none’
   - ‘once’
@@ -507,10 +507,10 @@ check_not_trash_sub_or_super_directory() {
 			if [ ! -L "$file" ]; then
 				file_realpath="$(realpath "$file")" || exit 2
 				if [[ "$file_realpath"/ == "$trash_realpath"/* ]]; then
-					echo "Error: '$file_realpath' is a subdirectory of the trash directory '$trash_realpath'"
+					echo "Error: '$file_realpath' is a subdirectory of the trash directory '$trash_realpath'" >&2
 					exit 1
 				elif [[ "$trash_realpath"/ == "$file_realpath"/* ]]; then
-					echo "Error: '$file_realpath' is a superdirectory of the trash directory '$trash_realpath'"
+					echo "Error: '$file_realpath' is a superdirectory of the trash directory '$trash_realpath'" >&2
 					exit 1
 				fi
 			fi
@@ -567,7 +567,7 @@ case "$ZAP_STRATEGY" in
 		# remove trailing comma and space
 		applescript_list="${applescript_list%, }"
 		command="tell app \"Finder\" to delete every item of {$applescript_list}"
-		echo "$command" >&2
+		[ -z "$verbose" ] || echo "$command" >&2
 		[ -n "$dry_run" ] || osascript -e "$command" >/dev/null
 		;;
 
