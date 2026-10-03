@@ -461,4 +461,23 @@ class TestZap < Minitest::Test
 			end
 		end
 	end
+
+	def test_fail_fast_on_trash_directory
+		strategy "freedesktop"
+		with_isolated_trash do |trash|
+			FileUtils.mkdir_p "#{trash}/files"
+			File.write "#{trash}/files/inside", "i"
+			File.write "good", "g"
+			system "zap", "--", "good", "#{trash}/files/inside", out: File::NULL, err: File::NULL
+			assert_equal 1, $?.exitstatus
+			assert File.exist? "good"
+			assert File.exist? "#{trash}/files/inside"
+
+			# -f doesn't override this, but still trashes everything else.
+			system "zap", "-f", "--", "good", "#{trash}/files/inside", out: File::NULL, err: File::NULL
+			assert_equal 1, $?.exitstatus
+			refute File.exist? "good"
+			assert File.exist? "#{trash}/files/inside"
+		end
+	end
 end
