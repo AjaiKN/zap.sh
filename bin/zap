@@ -15,12 +15,28 @@ mkpath() {
 		(*) printf './%s' "$1" ;;
 	esac
 }
+# Like dirname and basename, but without spawning a process.
 mydirname() {
-	dirname "$(mkpath "$1")"
+	local p
+	p=$(mkpath "$1")
+	case "$p" in
+		(*[!/]*) p=${p%"${p##*[!/]}"} ;; # strip trailing slashes
+		(*) printf '/\n'; return ;;
+	esac
+	p=${p%/*}
+	case "$p" in
+		(*[!/]*) printf '%s\n' "${p%"${p##*[!/]}"}" ;;
+		(*) printf '/\n' ;;
+	esac
 }
 mybasename() {
-	# In GNU bash 3.2.57(1)-release, `basename -- ...` doesn't work
-	basename "$(mkpath "$1")"
+	local p
+	p=$(mkpath "$1")
+	case "$p" in
+		(*[!/]*) p=${p%"${p##*[!/]}"} ;; # strip trailing slashes
+		(*) printf '/\n'; return ;;
+	esac
+	printf '%s\n' "${p##*/}"
 }
 
 # https://stackoverflow.com/a/21188136
@@ -214,24 +230,6 @@ stat_inode() {
 		stat -c %i "$1"
 	elif [ "$stattype" = bsd ]; then
 		stat -f %i "$1"
-	else
-		return 2
-	fi
-}
-stat_size() {
-	if [ "$stattype" = gnu ]; then
-		stat -c %s "$1"
-	elif [ "$stattype" = bsd ]; then
-		stat -f %z "$1"
-	else
-		return 2
-	fi
-}
-stat_mtime() {
-	if [ "$stattype" = gnu ]; then
-		stat -c %Y "$1"
-	elif [ "$stattype" = bsd ]; then
-		stat -f %m "$1"
 	else
 		return 2
 	fi
@@ -443,12 +441,13 @@ zap_recorddir="${XDG_DATA_HOME:-$HOME/.local/share}/zap"
 # Prints FILE's identity (without following symlinks), as
 # DEVICE:INODE:MTIME:SIZE.
 file_identity() {
-	local device inode mtime size
-	device=$(stat_device "$1") &&
-		inode=$(stat_inode "$1") &&
-		mtime=$(stat_mtime "$1") &&
-		size=$(stat_size "$1") &&
-		printf '%s\n' "$device:$inode:$mtime:$size"
+	if [ "$stattype" = gnu ]; then
+		stat -c %d:%i:%Y:%s "$1"
+	elif [ "$stattype" = bsd ]; then
+		stat -f %d:%i:%m:%z "$1"
+	else
+		return 2
+	fi
 }
 
 # identity_matches FILE IDENTITY
@@ -935,6 +934,12 @@ preflight_check() {
 		return 1
 	fi
 }
+
+# Look up the home mountpoint once here, since get_top_freedesktop_trashdir
+# usually runs in a subshell and so can't cache it itself.
+if [ "$ZAP_STRATEGY" = freedesktop ]; then
+	home_mountpoint=$(mountpoint_of "${XDG_DATA_HOME:-$HOME/.local/share}") || home_mountpoint=
+fi
 
 # Check every argument before trashing anything.
 files=()
