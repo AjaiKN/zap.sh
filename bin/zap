@@ -581,7 +581,8 @@ warn_full_disk_access() {
 list_trash() {
 	# shellcheck disable=SC2317,SC2329 # called by each_trash_entry
 	print_entry() {
-		printf '%s\t%s\n' "$1" "$2"
+		local date="$1" path="$2"
+		printf '%s\t%s\n' "$date" "$path"
 	}
 	each_trash_entry print_entry | LC_ALL=C sort -s -t "$(printf '\t')" -k1,1
 }
@@ -783,10 +784,11 @@ find_restore_candidate() {
 	restore_target=$(get_abs_filename "$1") || return 1
 	# shellcheck disable=SC2317,SC2329 # called by each_trash_entry
 	consider_entry() {
-		if [ "$2" = "$restore_target" ] && ! [[ $1 < $best_date ]]; then
-			best_info=$4
-			best_location=$3
-			best_date=$1
+		local date="$1" path="$2" location="$3" info="$4"
+		if [ "$path" = "$restore_target" ] && ! [[ $date < $best_date ]]; then
+			best_info=$info
+			best_location=$location
+			best_date=$date
 		fi
 	}
 	each_trash_entry consider_entry
