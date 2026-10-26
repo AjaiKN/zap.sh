@@ -467,19 +467,29 @@ identity_matches() {
 	fi
 }
 
+# Sets $_trash_dirs to the output of get_misc_trashdirs, once.
+_trash_dirs_known=
+find_trash_dirs() {
+	[ -n "$_trash_dirs_known" ] || { _trash_dirs=$(get_misc_trashdirs); _trash_dirs_known=1; }
+}
+
 # build_trash_index
 # Stats every item at the top level of the misc trash directories in one go, so
 # that find_trashed_by_identity doesn't have to fork a stat for each of them.
-# Sets $_trash_dirs (the output of get_misc_trashdirs), $_trash_items (the
-# items' paths) and $_trash_keys (lines of KEY<TAB>INDEX into $_trash_items,
-# where KEY is F:IDENTITY, or D:DEVICE:INODE for a directory; empty if the
+# Sets $_trash_items (the items' paths), $_trash_keys (each item's key: F:IDENTITY,
+# or D:DEVICE:INODE for a directory), $_trash_by_inode (for each inode number,
+# the space-separated positions in $_trash_items of the items with it; a sparse
+# array, since bash 3.2 has no associative arrays and searching a big string
+# with ${var#*pattern} takes quadratic time) and $_trash_indexed (empty if the
 # index couldn't be built). Only find_trashed_by_identity should use these.
 _trash_index_built=
 build_trash_index() {
-	local dir f mode id i=0 format
-	_trash_dirs=$(get_misc_trashdirs)
+	local dir f mode id inode i=0 format
+	find_trash_dirs
 	_trash_items=()
-	_trash_keys=
+	_trash_keys=()
+	_trash_by_inode=()
+	_trash_indexed=
 	_trash_index_built=1
 	while IFS= read -r dir; do
 		[ -n "$dir" ] || continue
@@ -495,17 +505,23 @@ build_trash_index() {
 		(bsd) format='-f %Sp %d:%i:%m:%z' ;;
 		(*) return 0 ;;
 	esac
-	local keys=$'\n'
 	while IFS=' ' read -r mode id; do
-		case "$mode" in
-			(d*) keys+="D:${id%:*:*}"$'\t'"$i"$'\n' ;;
-			(*) keys+="F:$id"$'\t'"$i"$'\n' ;;
+		inode=${id#*:}
+		inode=${inode%%:*}
+		# (Array subscripts are evaluated arithmetically, so only allow digits.)
+		case "$inode" in
+			(''|*[!0-9]*) return 0 ;;
 		esac
+		case "$mode" in
+			(d*) _trash_keys+=("D:${id%:*:*}") ;;
+			(*) _trash_keys+=("F:$id") ;;
+		esac
+		_trash_by_inode[inode]+=" $i"
 		i=$((i + 1))
 	done < <(stat "${format%% *}" "${format#* }" -- "${_trash_items[@]}" 2>/dev/null || :)
 	# If any stat failed (e.g. an item vanished), the lines no longer line up
 	# with $_trash_items, so don't use the index.
-	[ "$i" -ne "${#_trash_items[@]}" ] || _trash_keys=$keys
+	[ "$i" -ne "${#_trash_items[@]}" ] || _trash_indexed=1
 }
 
 # find_trashed_by_identity IDENTITY [NAME]
@@ -514,13 +530,18 @@ build_trash_index() {
 # before it was trashed) is given, the likely names for it are checked before
 # looking through every item in the trash: NAME itself, and the "NAME 2" /
 # "NAME 10.31.24 AM" style names that the macOS trash gives an item whose name
-# is already taken. (This isn't meant to be run in a subshell, so that the
-# trash index is only built once.)
+# is already taken. If the trash index has already been built, it's used
+# instead. (This isn't meant to be run in a subshell, so that the trash index is
+# only built once.)
 find_trashed_by_identity() {
-	local name="$2" dir f stem ext key rest
+	local name="$2" dir f stem ext
 	found_trashed=
 	[ -n "$1" ] || return 1
-	[ -n "$_trash_index_built" ] || build_trash_index
+	if [ -n "$_trash_index_built" ] && [ -n "$_trash_indexed" ]; then
+		find_in_trash_index "$1"
+		return
+	fi
+	find_trash_dirs
 	if [ -n "$name" ]; then
 		case "$name" in
 			(?*.*) stem=${name%.*} ext=.${name##*.} ;;
@@ -536,27 +557,36 @@ find_trashed_by_identity() {
 			done
 		done <<<"$_trash_dirs"
 	fi
-	if [ -n "$_trash_keys" ]; then
-		for key in "F:$1" "D:${1%:*:*}"; do
-			case "$_trash_keys" in
-				(*$'\n'"$key"$'\t'*)
-					rest=${_trash_keys#*$'\n'"$key"$'\t'}
-					f=${_trash_items[${rest%%$'\n'*}]}
-					# The index may be out of date by now.
-					if identity_matches "$f" "$1"; then
-						found_trashed=$f
-						return
-					fi
-					;;
-			esac
-		done
-		return 1
+	[ -n "$_trash_index_built" ] || build_trash_index
+	if [ -n "$_trash_indexed" ]; then
+		find_in_trash_index "$1"
+		return
 	fi
 	for f in ${_trash_items[@]+"${_trash_items[@]}"}; do
 		if identity_matches "$f" "$1"; then
 			found_trashed=$f
 			return
 		fi
+	done
+	return 1
+}
+
+# find_in_trash_index IDENTITY
+# Sets $found_trashed to the item in the (built, usable) trash index with the
+# identity IDENTITY. The index isn't rechecked, since it's from this same run.
+find_in_trash_index() {
+	local inode=${1#*:} i
+	inode=${inode%%:*}
+	case "$inode" in
+		(''|*[!0-9]*) return 1 ;;
+	esac
+	for i in ${_trash_by_inode[inode]-}; do
+		case "${_trash_keys[i]}" in
+			("F:$1"|"D:${1%:*:*}")
+				found_trashed=${_trash_items[i]}
+				return
+				;;
+		esac
 	done
 	return 1
 }
@@ -602,10 +632,14 @@ each_trash_entry() {
 
 	for info in "$zap_recorddir"/info/*.trashinfo; do
 		[ -f "$info" ] || continue
+		# With many records, looking each one up in the index is much faster than
+		# statting its item.
+		[ -n "$_trash_index_built" ] || build_trash_index
 		read_trashinfo "$zap_recorddir" "$info" || continue
-		if [ -n "$_ti_trashed_path" ] && identity_matches "$_ti_trashed_path" "$_ti_identity"; then
+		name=${_ti_trashed_path:-$_ti_path}
+		if [ -z "$_trash_indexed" ] && [ -n "$_ti_trashed_path" ] && identity_matches "$_ti_trashed_path" "$_ti_identity"; then
 			location=$_ti_trashed_path
-		elif find_trashed_by_identity "$_ti_identity" "$(mybasename "${_ti_trashed_path:-$_ti_path}")"; then
+		elif find_trashed_by_identity "$_ti_identity" "${name##*/}"; then
 			location=$found_trashed
 		elif [ -n "$_ti_identity" ] && is_listable_trashdir "${_ti_trashed_path%/*}"; then
 			# The whole trash was searched, so the item is gone for good (emptied
