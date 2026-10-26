@@ -484,30 +484,34 @@ find_trash_dirs() {
 # index couldn't be built). Only find_trashed_by_identity should use these.
 _trash_index_built=
 build_trash_index() {
-	local dir f mode id inode i=0 format
+	local dir dev f mode id inode i=0 format devs=()
 	find_trash_dirs
 	_trash_items=()
 	_trash_keys=()
 	_trash_by_inode=()
 	_trash_indexed=
 	_trash_index_built=1
+	# Each item is on the same device as its trash directory, so get the device
+	# once per directory: macOS's stat is much slower with %d than without.
 	while IFS= read -r dir; do
 		[ -n "$dir" ] || continue
+		dev=$(stat_device "$dir") || return 0
 		for f in "$dir"/* "$dir"/.[!.]* "$dir"/..?*; do
 			if [ -e "$f" ] || [ -L "$f" ]; then
 				_trash_items+=("$f")
+				devs+=("$dev")
 			fi
 		done
 	done <<<"$_trash_dirs"
 	[ "${#_trash_items[@]}" -gt 0 ] || return 0
 	case "$stattype" in
-		(gnu) format='-c %A %d:%i:%Y:%s' ;;
-		(bsd) format='-f %Sp %d:%i:%m:%z' ;;
+		(gnu) format='-c %A %i:%Y:%s' ;;
+		(bsd) format='-f %Sp %i:%m:%z' ;;
 		(*) return 0 ;;
 	esac
 	while IFS=' ' read -r mode id; do
-		inode=${id#*:}
-		inode=${inode%%:*}
+		inode=${id%%:*}
+		id="${devs[i]}:$id"
 		# (Array subscripts are evaluated arithmetically, so only allow digits.)
 		case "$inode" in
 			(''|*[!0-9]*) return 0 ;;
