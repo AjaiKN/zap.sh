@@ -653,6 +653,7 @@ each_trash_entry() {
 			continue
 		else
 			[ -z "$verbose" ] || echo "zap: Skipping stale record '$info': '$_ti_path' is no longer in the trash" >&2
+			warn_full_disk_access
 			continue
 		fi
 		"$1" "$_ti_date" "$_ti_path" "$location" "$info"
@@ -763,8 +764,12 @@ write_zap_record() {
 	fi
 }
 
-# On macOS, reading ~/.Trash requires Full Disk Access.
+# On macOS, listing ~/.Trash requires Full Disk Access. Call this when something
+# couldn't be found in the trash; it only warns once.
+warned_full_disk_access=
 warn_full_disk_access() {
+	[ -z "$warned_full_disk_access" ] || return 0
+	warned_full_disk_access=1
 	if [ "$(uname -s)" = Darwin ] && [ -d "$HOME/.Trash" ] && ! ls "$HOME/.Trash" >/dev/null 2>&1; then
 		echo "zap: Hint: your terminal may need Full Disk Access (System Settings > Privacy & Security) to read '$HOME/.Trash'" >&2
 	fi
@@ -940,9 +945,6 @@ fi
 ## List / restore
 
 # These look in every trash location zap knows about, regardless of strategy.
-if [ "$action" = list ] || [ "$action" = restore ]; then
-	warn_full_disk_access
-fi
 
 if [ "$action" = list ]; then
 	if [[ $# -gt 0 ]]; then
@@ -988,6 +990,7 @@ find_restore_candidate() {
 
 	if [ -z "$best_info" ]; then
 		echo "zap: '$restore_target' was not found in the trash" >&2
+		warn_full_disk_access
 		return 1
 	fi
 	if [ -e "$restore_target" ] || [ -L "$restore_target" ]; then
