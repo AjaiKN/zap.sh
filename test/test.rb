@@ -406,9 +406,29 @@ class TestZap < Minitest::Test
 			# Simulate emptying the trash.
 			File.delete "#{home}/.Trash/a.txt"
 			refute_match(/a\.txt/, `zap --list`)
+			assert_empty zap_records(home)
 			system "zap", "--restore", "--", "a.txt", out: File::NULL, err: File::NULL
 			refute $?.success?
 			refute File.exist? "a.txt"
+		end
+	end
+
+	def test_macos_mv_stale_record_kept_if_trash_unreadable
+		skip "can't make a directory unreadable as root" if Process.uid == 0
+		strategy "macos_mv"
+		with_fake_home do |home|
+			File.write "a.txt", "a"
+			system "zap", "--", "a.txt", out: File::NULL, exception: true
+			File.delete "#{home}/.Trash/a.txt"
+			# Like ~/.Trash without Full Disk Access: it can't be listed, so zap
+			# can't tell whether the item is still in there somewhere.
+			File.chmod 0o300, "#{home}/.Trash"
+			begin
+				refute_match(/a\.txt/, `zap --list 2>/dev/null`)
+			ensure
+				File.chmod 0o700, "#{home}/.Trash"
+			end
+			assert_equal 1, zap_records(home).length
 		end
 	end
 

@@ -559,6 +559,18 @@ find_trashed_by_identity() {
 	return 1
 }
 
+# is_listable_trashdir DIR
+# Whether DIR is one of the misc trash directories and we can list it (which,
+# for ~/.Trash on macOS, needs Full Disk Access), i.e. whether
+# find_trashed_by_identity would have found anything there.
+is_listable_trashdir() {
+	[ -n "$_trash_index_built" ] && [ -n "$1" ] || return 1
+	case $'\n'"$_trash_dirs"$'\n' in
+		(*$'\n'"$1"$'\n'*) ls -- "$1" >/dev/null 2>&1 ;;
+		(*) return 1 ;;
+	esac
+}
+
 # each_trash_entry CALLBACK
 # Calls CALLBACK DATE PATH LOCATION INFO once for every trashed item that can be
 # found, whether in a freedesktop.org trash directory or recorded by zap:
@@ -586,6 +598,12 @@ each_trash_entry() {
 			location=$_ti_trashed_path
 		elif find_trashed_by_identity "$_ti_identity" "$(mybasename "${_ti_trashed_path:-$_ti_path}")"; then
 			location=$found_trashed
+		elif [ -n "$_ti_identity" ] && is_listable_trashdir "${_ti_trashed_path%/*}"; then
+			# The whole trash was searched, so the item is gone for good (emptied
+			# or put back); forget about it so later runs don't search for it again.
+			[ -z "$verbose" ] || echo "zap: Removing stale record '$info': '$_ti_path' is no longer in the trash" >&2
+			[ -n "$dry_run" ] || rm -f -- "$info"
+			continue
 		else
 			[ -z "$verbose" ] || echo "zap: Skipping stale record '$info': '$_ti_path' is no longer in the trash" >&2
 			continue
