@@ -119,10 +119,12 @@ urlencode_help() {
 urlencode() {
 	printf '%s' "$1" | urlencode_help
 }
+# urldecode VAR STRING
+# Sets VAR to STRING decoded (without a subshell, to avoid forking).
 urldecode() {
 	# Escape existing backslashes, then turn each %XX into \xXX for printf %b.
-	local s=${1//\\/\\\\}
-	printf '%b' "${s//%/\\x}"
+	local s=${2//\\/\\\\}
+	printf -v "$1" '%b' "${s//%/\\x}"
 }
 
 can_delete_file() {
@@ -410,9 +412,9 @@ read_trashinfo() {
 		case "$line" in
 			('[Trash Info]') in_section=1 ;;
 			('['*) in_section= ;;
-			(Path=*) [ -z "$in_section" ] || _ti_path=$(urldecode "${line#Path=}") ;;
+			(Path=*) [ -z "$in_section" ] || urldecode _ti_path "${line#Path=}" ;;
 			(DeletionDate=*) [ -z "$in_section" ] || _ti_date=${line#DeletionDate=} ;;
-			(X-Zap-TrashedPath=*) [ -z "$in_section" ] || _ti_trashed_path=$(urldecode "${line#*=}") ;;
+			(X-Zap-TrashedPath=*) [ -z "$in_section" ] || urldecode _ti_trashed_path "${line#*=}" ;;
 			(X-Zap-Device=*) [ -z "$in_section" ] || device=${line#*=} ;;
 			(X-Zap-Inode=*) [ -z "$in_section" ] || inode=${line#*=} ;;
 			(X-Zap-Mtime=*) [ -z "$in_section" ] || mtime=${line#*=} ;;
@@ -591,7 +593,7 @@ each_trash_entry() {
 		for info in "$trashdir"/info/*.trashinfo; do
 			[ -f "$info" ] || continue
 			read_trashinfo "$trashdir" "$info" || continue
-			name=$(mybasename "$info")
+			name=${info##*/}
 			location="$trashdir/files/${name%.trashinfo}"
 			[ -e "$location" ] || [ -L "$location" ] || continue
 			"$1" "$_ti_date" "$_ti_path" "$location" "$info"
