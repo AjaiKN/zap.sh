@@ -17,7 +17,6 @@ brew install ajaikn/tap/zap.sh
 ** Restoring on macOS
 macOS doesn't record where trashed files came from in a form other tools can read, so when zap trashes something with one of the =macos_*= strategies, it writes its own record (a =.trashinfo= file with extra =X-Zap-*= keys) to =$XDG_DATA_HOME/zap/info= (default =~/.local/share/zap/info=). =zap --list= and =zap --restore= use these records, so they only know about files that zap itself trashed.
 
-Reading =~/.Trash= requires your terminal to have /Full Disk Access/ (System Settings → Privacy & Security). Without it, zap can still trash files, but it can't find them in the trash to record or restore them.
 ** Usage
 #+begin_src
 Usage: zap [OPTION]... [--] FILE...
@@ -51,8 +50,8 @@ Put each FILE in the trash. Currently supports macOS and Linux.
 *Available strategies*
   freedesktop              (default on Linux) Use the freedesktop.org Trash Specification:
                            https://specifications.freedesktop.org/trash-spec/1.0/
-  macos_trash_command      (default on macOS >=14.0) Use the built-in macOS /usr/bin/trash command
-  macos_applescript        (default on macOS <14.0) Use AppleScript
+  macos_trash_command      (default on macOS >=15.0) Use the built-in macOS /usr/bin/trash command
+  macos_applescript        (default on macOS <15.0) Use AppleScript
   macos_mv                 Use mv to move to ~/.Trash/
   gio                      Use the 'gio trash' command
   kioclient                Use the 'kioclient move FILE... trash:/' command

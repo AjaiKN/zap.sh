@@ -474,13 +474,37 @@ class TestZap < Minitest::Test
 		`uname -s`.chomp == 'Darwin' && (Dir.children("#{Dir.home}/.Trash") rescue false)
 	end
 
+	# These don't need ~/.Trash to be readable, since zap gets the trashed path
+	# from `trash --verbose` (and statting or moving a known path in ~/.Trash
+	# doesn't need Full Disk Access).
 	def test_macos_trash_command_restore
-		skip "not on mac, or ~/.Trash not readable" unless macos_trash_readable? && File.executable?("/usr/bin/trash")
+		skip "/usr/bin/trash not available" unless File.executable?("/usr/bin/trash")
 		restore_round_trip_with("macos_trash_command") do |xdg|
 			# The record should point into ~/.Trash, spelled correctly even on a
 			# case-insensitive filesystem where ~/.trash is the same directory.
 			record = Dir.glob("#{xdg}/zap/info/*.trashinfo").first
 			assert_match(%r{^X-Zap-TrashedPath=#{Regexp.escape(Dir.home)}/\.Trash/a\.txt}, File.read(record))
+		end
+	end
+
+	def test_macos_trash_command_ambiguous_verbose_output
+		skip "/usr/bin/trash not available" unless File.executable?("/usr/bin/trash")
+		strategy "macos_trash_command"
+		with_isolated_trash do
+			# trash --verbose prints `# Moved "SOURCE" to "DESTINATION"` without
+			# escaping either path.
+			name = "q\" to \"x\ny.txt"
+			File.write name, "older"
+			system "zap", "--", name, out: File::NULL, exception: true
+			sleep 1.1 # DeletionDate has one-second resolution
+			# The same name again, so the trash has to rename it.
+			File.write name, "newer"
+			system "zap", "--", name, out: File::NULL, exception: true
+			system "zap", "--restore", "--", name, out: File::NULL, exception: true
+			assert_equal "newer", File.read(name)
+			File.delete name
+			system "zap", "--restore", "--", name, out: File::NULL, exception: true
+			assert_equal "older", File.read(name)
 		end
 	end
 

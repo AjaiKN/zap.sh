@@ -87,8 +87,8 @@ Put each FILE in the trash. Currently supports macOS and Linux.
 *Available strategies*
   freedesktop              (default on Linux) Use the freedesktop.org Trash Specification:
                            https://specifications.freedesktop.org/trash-spec/1.0/
-  macos_trash_command      (default on macOS >=14.0) Use the built-in macOS /usr/bin/trash command
-  macos_applescript        (default on macOS <14.0) Use AppleScript
+  macos_trash_command      (default on macOS >=15.0) Use the built-in macOS /usr/bin/trash command
+  macos_applescript        (default on macOS <15.0) Use AppleScript
   macos_mv                 Use mv to move to ~/.Trash/
   gio                      Use the 'gio trash' command
   kioclient                Use the 'kioclient move FILE... trash:/' command
@@ -669,6 +669,57 @@ remember_identities() {
 	done
 }
 
+# parse_trash_output OUTPUT
+# Sets $_tv_dests to the possible destinations in OUTPUT, the output of
+# `/usr/bin/trash --verbose`, for find_in_trash_output. Each moved item gets a
+# `# Moved "SOURCE" to "DESTINATION"` line, but neither path is escaped, so
+# there's a possible destination after each `" to "` in the entry (and an
+# entry may span lines); the right one is told apart by its identity.
+_tv_dests=()
+_tv_next=0
+parse_trash_output() {
+	local line entry='' have_entry=''
+	_tv_dests=()
+	_tv_next=0
+	while IFS= read -r line; do
+		if [[ $line == '# Moved "'* ]]; then
+			[ -z "$have_entry" ] || add_trash_output_entry "$entry"
+			entry=${line#'# Moved "'}
+			have_entry=1
+		elif [ -n "$have_entry" ]; then
+			entry+=$'\n'"$line"
+		fi
+	done <<<"$1"
+	[ -z "$have_entry" ] || add_trash_output_entry "$entry"
+}
+add_trash_output_entry() {
+	local rest="$1"
+	[[ $rest == *'"' ]] || return 0
+	rest=${rest%'"'}
+	while [[ $rest == *'" to "'* ]]; do
+		rest=${rest#*'" to "'}
+		[[ $rest != /* ]] || _tv_dests+=("$rest")
+	done
+}
+
+# find_in_trash_output IDENTITY
+# Sets $found_trashed to the destination from parse_trash_output with the
+# identity IDENTITY. Since the destinations are normally in the same order as
+# the files, it looks from just after the last one found. (Unlike looking in
+# the trash directory itself, this doesn't need Full Disk Access on macOS.)
+find_in_trash_output() {
+	local j
+	found_trashed=
+	for ((j = _tv_next; j < ${#_tv_dests[@]}; j++)); do
+		if identity_matches "${_tv_dests[j]}" "$1"; then
+			found_trashed=${_tv_dests[j]}
+			_tv_next=$((j + 1))
+			return
+		fi
+	done
+	return 1
+}
+
 # record_trashed IDENTITIES FILE...
 # IDENTITIES is the output of remember_identities FILE.... For each FILE that's
 # no longer at its original path, find it in the trash by its identity and write
@@ -679,7 +730,7 @@ record_trashed() {
 	for f in "$@"; do
 		IFS= read -r -u 3 id || id=
 		if [ -n "$id" ] && [ ! -e "$f" ] && [ ! -L "$f" ]; then
-			if find_trashed_by_identity "$id" "$(mybasename "$f")"; then
+			if find_in_trash_output "$id" || find_trashed_by_identity "$id" "$(mybasename "$f")"; then
 				write_zap_record "$f" "$found_trashed"
 			else
 				echo "zap: Warning: couldn't find '$f' in the trash, so it won't be restorable with --restore" >&2
@@ -1009,7 +1060,7 @@ choose_strategy() {
 
 	if [ "$(uname -s)" = "Darwin" ]; then
 		if [ -x /usr/bin/trash ]; then
-			# introduced in macOS 14.0
+			# introduced in macOS 15.0
 			echo macos_trash_command
 			return
 		elif command -v osascript >/dev/null 2>&1; then
@@ -1208,17 +1259,20 @@ case "$ZAP_STRATEGY" in
 		;;
 
 	macos_trash_command)
-		# introduced in macOS 14.0
-		options=()
+		# introduced in macOS 15.0
+		# (--verbose prints where each item went, so that record_trashed doesn't
+		# have to search the trash for it.)
+		options=(--verbose)
 		[ -n "$force"   ] || options+=(--stopOnError)
-		[ -z "$verbose" ] || options+=(--verbose)
-		[ -z "$verbose" ] || echo /usr/bin/trash ${options[@]+"${options[@]}"} "$@" >&2
+		[ -z "$verbose" ] || echo /usr/bin/trash "${options[@]}" "$@" >&2
 		# /usr/bin/trash doesn't support `--`, but that should be fine because we're
 		# using absolute paths.
 		if [ -z "$dry_run" ]; then
 			ids=$(remember_identities "$@")
 			status=0
-			/usr/bin/trash ${options[@]+"${options[@]}"} "$@" || status=$?
+			output=$(/usr/bin/trash "${options[@]}" "$@") || status=$?
+			[ -z "$verbose" ] || [ -z "$output" ] || printf '%s\n' "$output"
+			parse_trash_output "$output"
 			record_trashed "$ids" "$@"
 			[ "$status" -eq 0 ] || exit "$status"
 		fi
