@@ -465,15 +465,60 @@ identity_matches() {
 	fi
 }
 
-# find_trashed_by_identity IDENTITY [NAME [TRASHDIRS]]
-# Prints the path of the item at the top level of one of the misc trash
-# directories with the identity IDENTITY. If NAME (the item's name before it was
-# trashed) is given, the likely names for it are checked before scanning every
-# item in the trash: NAME itself, and the "NAME 2" / "NAME 10.31.24 AM" style
-# names that the macOS trash gives an item whose name is already taken.
-# TRASHDIRS is the output of get_misc_trashdirs, to avoid recomputing it.
+# build_trash_index
+# Stats every item at the top level of the misc trash directories in one go, so
+# that find_trashed_by_identity doesn't have to fork a stat for each of them.
+# Sets $_trash_dirs (the output of get_misc_trashdirs), $_trash_items (the
+# items' paths) and $_trash_keys (lines of KEY<TAB>INDEX into $_trash_items,
+# where KEY is F:IDENTITY, or D:DEVICE:INODE for a directory; empty if the
+# index couldn't be built). Only find_trashed_by_identity should use these.
+_trash_index_built=
+build_trash_index() {
+	local dir f mode id i=0 format
+	_trash_dirs=$(get_misc_trashdirs)
+	_trash_items=()
+	_trash_keys=
+	_trash_index_built=1
+	while IFS= read -r dir; do
+		[ -n "$dir" ] || continue
+		for f in "$dir"/* "$dir"/.[!.]* "$dir"/..?*; do
+			if [ -e "$f" ] || [ -L "$f" ]; then
+				_trash_items+=("$f")
+			fi
+		done
+	done <<<"$_trash_dirs"
+	[ "${#_trash_items[@]}" -gt 0 ] || return 0
+	case "$stattype" in
+		(gnu) format='-c %A %d:%i:%Y:%s' ;;
+		(bsd) format='-f %Sp %d:%i:%m:%z' ;;
+		(*) return 0 ;;
+	esac
+	local keys=$'\n'
+	while IFS=' ' read -r mode id; do
+		case "$mode" in
+			(d*) keys+="D:${id%:*:*}"$'\t'"$i"$'\n' ;;
+			(*) keys+="F:$id"$'\t'"$i"$'\n' ;;
+		esac
+		i=$((i + 1))
+	done < <(stat "${format%% *}" "${format#* }" -- "${_trash_items[@]}" 2>/dev/null || :)
+	# If any stat failed (e.g. an item vanished), the lines no longer line up
+	# with $_trash_items, so don't use the index.
+	[ "$i" -ne "${#_trash_items[@]}" ] || _trash_keys=$keys
+}
+
+# find_trashed_by_identity IDENTITY [NAME]
+# Sets $found_trashed to the path of the item at the top level of one of the
+# misc trash directories with the identity IDENTITY. If NAME (the item's name
+# before it was trashed) is given, the likely names for it are checked before
+# looking through every item in the trash: NAME itself, and the "NAME 2" /
+# "NAME 10.31.24 AM" style names that the macOS trash gives an item whose name
+# is already taken. (This isn't meant to be run in a subshell, so that the
+# trash index is only built once.)
 find_trashed_by_identity() {
-	local name="$2" trashdirs="${3-$(get_misc_trashdirs)}" dir f stem ext
+	local name="$2" dir f stem ext key rest
+	found_trashed=
+	[ -n "$1" ] || return 1
+	[ -n "$_trash_index_built" ] || build_trash_index
 	if [ -n "$name" ]; then
 		case "$name" in
 			(?*.*) stem=${name%.*} ext=.${name##*.} ;;
@@ -483,21 +528,34 @@ find_trashed_by_identity() {
 			[ -n "$dir" ] || continue
 			for f in "$dir/$name" "$dir/$stem "*"$ext"; do
 				if identity_matches "$f" "$1"; then
-					printf '%s\n' "$f"
+					found_trashed=$f
 					return
 				fi
 			done
-		done <<<"$trashdirs"
+		done <<<"$_trash_dirs"
 	fi
-	while IFS= read -r dir; do
-		[ -n "$dir" ] || continue
-		for f in "$dir"/* "$dir"/.[!.]* "$dir"/..?*; do
-			if identity_matches "$f" "$1"; then
-				printf '%s\n' "$f"
-				return
-			fi
+	if [ -n "$_trash_keys" ]; then
+		for key in "F:$1" "D:${1%:*:*}"; do
+			case "$_trash_keys" in
+				(*$'\n'"$key"$'\t'*)
+					rest=${_trash_keys#*$'\n'"$key"$'\t'}
+					f=${_trash_items[${rest%%$'\n'*}]}
+					# The index may be out of date by now.
+					if identity_matches "$f" "$1"; then
+						found_trashed=$f
+						return
+					fi
+					;;
+			esac
 		done
-	done <<<"$trashdirs"
+		return 1
+	fi
+	for f in ${_trash_items[@]+"${_trash_items[@]}"}; do
+		if identity_matches "$f" "$1"; then
+			found_trashed=$f
+			return
+		fi
+	done
 	return 1
 }
 
@@ -509,7 +567,7 @@ find_trashed_by_identity() {
 #   LOCATION  where the item currently is in the trash
 #   INFO      its .trashinfo file
 each_trash_entry() {
-	local trashdir info name location misc_trashdirs='' have_misc_trashdirs=''
+	local trashdir info name location
 	while IFS= read -r trashdir; do
 		for info in "$trashdir"/info/*.trashinfo; do
 			[ -f "$info" ] || continue
@@ -526,11 +584,8 @@ each_trash_entry() {
 		read_trashinfo "$zap_recorddir" "$info" || continue
 		if [ -n "$_ti_trashed_path" ] && identity_matches "$_ti_trashed_path" "$_ti_identity"; then
 			location=$_ti_trashed_path
-		elif
-			[ -n "$have_misc_trashdirs" ] || { misc_trashdirs=$(get_misc_trashdirs); have_misc_trashdirs=1; }
-			location=$(find_trashed_by_identity "$_ti_identity" "$(mybasename "${_ti_trashed_path:-$_ti_path}")" "$misc_trashdirs")
-		then
-			:
+		elif find_trashed_by_identity "$_ti_identity" "$(mybasename "${_ti_trashed_path:-$_ti_path}")"; then
+			location=$found_trashed
 		else
 			[ -z "$verbose" ] || echo "zap: Skipping stale record '$info': '$_ti_path' is no longer in the trash" >&2
 			continue
@@ -554,14 +609,13 @@ remember_identities() {
 # no longer at its original path, find it in the trash by its identity and write
 # a record to $zap_recorddir/info so that --list and --restore can find it.
 record_trashed() {
-	local identities="$1" f id trashed misc_trashdirs='' have_misc_trashdirs=''
+	local identities="$1" f id
 	shift
 	for f in "$@"; do
 		IFS= read -r -u 3 id || id=
 		if [ -n "$id" ] && [ ! -e "$f" ] && [ ! -L "$f" ]; then
-			[ -n "$have_misc_trashdirs" ] || { misc_trashdirs=$(get_misc_trashdirs); have_misc_trashdirs=1; }
-			if trashed=$(find_trashed_by_identity "$id" "$(mybasename "$f")" "$misc_trashdirs"); then
-				write_zap_record "$f" "$trashed"
+			if find_trashed_by_identity "$id" "$(mybasename "$f")"; then
+				write_zap_record "$f" "$found_trashed"
 			else
 				echo "zap: Warning: couldn't find '$f' in the trash, so it won't be restorable with --restore" >&2
 				warn_full_disk_access
