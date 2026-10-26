@@ -562,13 +562,20 @@ find_trashed_by_identity() {
 # is_listable_trashdir DIR
 # Whether DIR is one of the misc trash directories and we can list it (which,
 # for ~/.Trash on macOS, needs Full Disk Access), i.e. whether
-# find_trashed_by_identity would have found anything there.
+# find_trashed_by_identity would have found anything there. (They're compared
+# by device and inode, since e.g. ~/.trash may be recorded for ~/.Trash.)
 is_listable_trashdir() {
+	local id dir
 	[ -n "$_trash_index_built" ] && [ -n "$1" ] || return 1
-	case $'\n'"$_trash_dirs"$'\n' in
-		(*$'\n'"$1"$'\n'*) ls -- "$1" >/dev/null 2>&1 ;;
-		(*) return 1 ;;
-	esac
+	id="$(stat_device "$1"):$(stat_inode "$1")" 2>/dev/null || return 1
+	while IFS= read -r dir; do
+		[ -n "$dir" ] || continue
+		if [ "$(stat_device "$dir"):$(stat_inode "$dir")" = "$id" ]; then
+			ls -- "$dir" >/dev/null 2>&1
+			return
+		fi
+	done <<<"$_trash_dirs"
+	return 1
 }
 
 # each_trash_entry CALLBACK

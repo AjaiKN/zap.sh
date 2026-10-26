@@ -413,6 +413,21 @@ class TestZap < Minitest::Test
 		end
 	end
 
+	def test_macos_mv_stale_record_with_other_trash_spelling
+		strategy "macos_mv"
+		with_fake_home do |home|
+			File.write "a.txt", "a"
+			system "zap", "--", "a.txt", out: File::NULL, exception: true
+			File.delete "#{home}/.Trash/a.txt"
+			record = zap_records(home).first
+			File.write record, File.read(record).sub("/.Trash/", "/.trash/")
+			# Only the same directory on a case-insensitive filesystem.
+			skip "case-sensitive filesystem" unless File.directory? "#{home}/.trash"
+			`zap --list`
+			assert_empty zap_records(home)
+		end
+	end
+
 	def test_macos_mv_stale_record_kept_if_trash_unreadable
 		skip "can't make a directory unreadable as root" if Process.uid == 0
 		strategy "macos_mv"
