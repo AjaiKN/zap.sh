@@ -56,7 +56,8 @@ Put each FILE in the trash. Currently supports macOS and Linux.
                            https://specifications.freedesktop.org/trash-spec/1.0/
   macos_trash_command      (default on macOS >=15.0) Use the built-in macOS /usr/bin/trash command
   macos_applescript        (default on macOS <15.0) Use AppleScript
-  macos_mv                 Use mv to move to ~/.Trash/
+  macos_mv                 (default on macOS as root) Use mv to move to ~/.Trash/. Under sudo, that's the
+                           invoking user's trash, like Finder.
   gio                      Use the 'gio trash' command
   kioclient                Use the 'kioclient move FILE... trash:/' command
   trash_cli                Use trash-put from trash-cli: https://github.com/andreafrancia/trash-cli

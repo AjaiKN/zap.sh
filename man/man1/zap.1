@@ -90,7 +90,8 @@ macos_applescript
 (default on macOS <15.0) Use AppleScript
 .TP
 macos_mv
-Use mv to move to ~/.Trash/
+(default on macOS as root) Use mv to move to ~/.Trash/. Under sudo, that's the
+invoking user's trash, like Finder.
 .TP
 gio
 Use the 'gio trash' command
