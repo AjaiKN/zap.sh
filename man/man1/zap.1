@@ -25,6 +25,18 @@ directories aren't writable) are reported and skipped while everything else is
 still trashed, in which case the exit status is 1. Without \fB\-\-force\fR, this command
 refuses to do anything if any of the arguments would fail to be trashed.
 .TP
+\fB\-i\fR
+Prompt before trashing each file.
+.TP
+\fB\-I\fR
+Prompt once before trashing more than three files, or when trashing recursively
+(with \fB\-r\fR).
+.TP
+\fB\-\-interactive\fR[=\fI\,WHEN\/\fR] Prompt according to WHEN: never, once (\fB\-I\fR), or always (\fB\-i\fR). Without WHEN,
+always prompt. By default, prompt before trashing a write\-protected file if
+standard input is a terminal, and otherwise refuse (unless \fB\-\-force\fR is given).
+\fB\-i\fR and \fB\-I\fR cancel an earlier \fB\-\-force\fR, and \fB\-\-force\fR cancels an earlier \fB\-i\fR or \fB\-I\fR.
+.TP
 \fB\-n\fR, \fB\-\-dry\-run\fR
 Don't actually trash anything; just print what this command *would* do.
 This option implies \fB\-\-verbose\fR.
@@ -52,7 +64,7 @@ seen.
 Does nothing. For compatibility with rm.
 .TP
 \fB\-r\fR, \fB\-R\fR, \fB\-\-recursive\fR
-Does nothing. For compatibility with rm.
+Does nothing (except with \fB\-I\fR). For compatibility with rm.
 .SH "AVAILABLE STRATEGIES"
 .TP
 freedesktop

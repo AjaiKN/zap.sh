@@ -2,6 +2,9 @@
 
 require "minitest/autorun"
 require "uri"
+require "open3"
+require "expect"
+require "pty"
 
 ENV["PATH"] = File.realpath(__dir__ + "/../bin") + ":" + ENV["PATH"]
 
@@ -695,6 +698,141 @@ class TestZap < Minitest::Test
 					FileUtils.chmod 0o644, "#{trash}/files/d/inner"
 				end
 			end
+		end
+	end
+
+	def zap_with_input(input, *args)
+		Open3.capture3("zap", *args, stdin_data: input)
+	end
+
+	def test_interactive_each
+		strategy "freedesktop"
+		with_isolated_trash do |trash|
+			File.write "a", "a"
+			File.write "b", ""
+			_, err, status = zap_with_input("y\nn\n", "-i", "--", "a", "b")
+			assert status.success?
+			assert_match(/zap: trash regular file '.*\/a'\? /, err)
+			assert_match(/zap: trash regular empty file '.*\/b'\? /, err)
+			refute File.exist? "a"
+			assert File.exist? "b"
+			assert_equal ["a"], Dir.children("#{trash}/files")
+		end
+	end
+
+	def test_interactive_all_declined_or_eof
+		strategy "freedesktop"
+		with_isolated_trash do |trash|
+			File.write "a", "a"
+			_, _, status = zap_with_input("n\n", "--interactive", "--", "a")
+			assert status.success?
+			_, _, status = zap_with_input("", "--interactive=always", "--", "a")
+			assert status.success?
+			assert File.exist? "a"
+			assert_empty Dir.glob("#{trash}/files/*")
+		end
+	end
+
+	def test_interactive_cancels_earlier_force
+		strategy "freedesktop"
+		with_isolated_trash do
+			_, err, status = zap_with_input("y\n", "-f", "-i", "--", "does-not-exist")
+			assert_equal 1, status.exitstatus
+			assert_match(/does not exist/, err)
+
+			File.write "a", "a"
+			_, err, status = zap_with_input("", "-i", "-f", "--", "a")
+			assert status.success?
+			refute_match(/\?/, err)
+			refute File.exist? "a"
+		end
+	end
+
+	def test_interactive_once
+		strategy "freedesktop"
+		with_isolated_trash do
+			%w[a b c d].each { File.write _1, _1 }
+			# Three files: no prompt.
+			_, err, status = zap_with_input("", "-I", "--", "a", "b", "c")
+			assert status.success?
+			refute_match(/\?/, err)
+			refute File.exist? "a"
+
+			File.write "a", "a"
+			_, err, status = zap_with_input("n\n", "-I", "--", "a")
+			assert status.success?
+			refute_match(/\?/, err)
+			refute File.exist? "a"
+
+			File.write "a", "a"
+			_, err, status = zap_with_input("n\n", "-rI", "--", "a")
+			assert status.success?
+			assert_match(/zap: trash 1 argument recursively\? /, err)
+			assert File.exist? "a"
+
+			%w[b c].each { File.write _1, _1 }
+			_, err, status = zap_with_input("n\n", "-I", "--", "a", "b", "c", "d")
+			assert status.success?
+			assert_match(/zap: trash 4 arguments\? /, err)
+			assert %w[a b c d].all? { File.exist? _1 }
+
+			_, _, status = zap_with_input("y\n", "--interactive=once", "--", "a", "b", "c", "d")
+			assert status.success?
+			refute %w[a b c d].any? { File.exist? _1 }
+		end
+	end
+
+	def test_interactive_never_prompts_after_failure
+		strategy "freedesktop"
+		with_isolated_trash do
+			File.write "a", "a"
+			_, err, status = zap_with_input("y\n", "-i", "--", "a", "does-not-exist")
+			assert_equal 1, status.exitstatus
+			refute_match(/\?/, err)
+			assert File.exist? "a"
+		end
+	end
+
+	def test_write_protected
+		skip "running as root" if Process.uid == 0
+		strategy "freedesktop"
+		with_isolated_trash do
+			File.write "ro", "r"
+			FileUtils.chmod 0o444, "ro"
+			# stdin isn't a terminal, so refuse.
+			_, err, status = zap_with_input("y\n", "--", "ro")
+			assert_equal 1, status.exitstatus
+			assert_match(/not writable/, err)
+			assert File.exist? "ro"
+
+			_, err, status = zap_with_input("y\n", "--interactive=never", "--", "ro")
+			assert_equal 1, status.exitstatus
+			assert File.exist? "ro"
+
+			_, err, status = zap_with_input("n\n", "-i", "--", "ro")
+			assert status.success?
+			assert_match(/zap: trash write-protected regular file '.*\/ro'\? /, err)
+			assert File.exist? "ro"
+
+			_, _, status = zap_with_input("y\n", "-i", "--", "ro")
+			assert status.success?
+			refute File.exist? "ro"
+		end
+	end
+
+	def test_write_protected_prompts_on_terminal
+		skip "running as root" if Process.uid == 0
+		strategy "freedesktop"
+		with_isolated_trash do
+			File.write "ro", "r"
+			FileUtils.chmod 0o444, "ro"
+			PTY.spawn("zap", "--", "ro") do |r, w, pid|
+				r.expect(/write-protected regular file .*\? /, 10) or flunk "no prompt"
+				w.puts "y"
+				Process.wait pid
+			end
+			assert $?.success?
+			refute File.exist? "ro"
 		end
 	end
 end

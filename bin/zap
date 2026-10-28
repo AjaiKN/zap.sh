@@ -68,6 +68,13 @@ Put each FILE in the trash. Currently supports macOS and Linux.
                            directories aren't writable) are reported and skipped while everything else is
                            still trashed, in which case the exit status is 1. Without --force, this command
                            refuses to do anything if any of the arguments would fail to be trashed.
+  -i                       Prompt before trashing each file.
+  -I                       Prompt once before trashing more than three files, or when trashing recursively
+                           (with -r).
+      --interactive[=WHEN] Prompt according to WHEN: never, once (-I), or always (-i). Without WHEN,
+                           always prompt. By default, prompt before trashing a write-protected file if
+                           standard input is a terminal, and otherwise refuse (unless --force is given).
+                           -i and -I cancel an earlier --force, and --force cancels an earlier -i or -I.
   -n, --dry-run            Don't actually trash anything; just print what this command *would* do.
                            This option implies --verbose.
   -v, --verbose            Be more verbose.
@@ -82,7 +89,7 @@ Put each FILE in the trash. Currently supports macOS and Linux.
                            in \$XDG_DATA_HOME/zap/info). Items trashed with other tools on macOS aren't
                            seen.
   -d, --dir                Does nothing. For compatibility with rm.
-  -r, -R, --recursive      Does nothing. For compatibility with rm.
+  -r, -R, --recursive      Does nothing (except with -I). For compatibility with rm.
 
 *Available strategies*
   freedesktop              (default on Linux) Use the freedesktop.org Trash Specification:
@@ -157,10 +164,32 @@ is_writable_by_current_user() {
 		return 0
 	fi
 	# Check if writable.
-	if [ ! -w "$1" ]; then
-		echo "zap: The file '$1' is not writable by the current user. Use --force to override." >&2
-		return 1
+	[ -w "$1" ]
+}
+
+# describe_file_type FILE
+# Prints a description of FILE's type, like the ones in rm's prompts.
+describe_file_type() {
+	if [ -L "$1" ]; then echo "symbolic link"
+	elif [ -d "$1" ]; then echo "directory"
+	elif [ -p "$1" ]; then echo "fifo"
+	elif [ -S "$1" ]; then echo "socket"
+	elif [ -c "$1" ]; then echo "character special file"
+	elif [ -b "$1" ]; then echo "block special file"
+	elif [ -s "$1" ]; then echo "regular file"
+	elif [ -f "$1" ]; then echo "regular empty file"
+	else echo "file"
 	fi
+}
+
+# confirm PROMPT
+# Prints PROMPT to stderr and succeeds if the reply (read from stdin, like rm)
+# starts with y or Y.
+confirm() {
+	local reply
+	printf '%s' "$1" >&2
+	IFS= read -r reply || reply=
+	[[ $reply == [yY]* ]]
 }
 
 # https://unix.stackexchange.com/a/44267
@@ -825,18 +854,18 @@ dry_run=
 verbose=
 # verbose by default if sudo
 [ "$EUID" -ne 0 ] || verbose=1
-# TODO: implement interactive
 # 0 (-f OR --interactive=never): never prompt
-# 1 (default): prompt if write-protected and standard output is a terminal
+# 1 (default): prompt if write-protected and standard input is a terminal
 # 2 (-I): prompt once
 # 3 (-i): prompt always
 interactive=1
+# whether -r/-R/--recursive was given (only affects -I's prompt, like rm)
+recursive=
 # TODO: maybe add --sudo option (or maybe prompt in that case if interactive>=1)
 # that uses sudo to change the ownership before trashing if we don't have the
 # permissions, since:
 # 1. sudo changes $HOME to /root and unsets $XDG_DATA_HOME on Linux, and
 # 2. we probably don't want unmovable stuff in our user trash
-# shellcheck disable=SC2034 # $interactive isn't used until -i/-I are implemented
 while [[ $# -gt 0 ]]; do
 	opt="$1"
 	case "$1" in
@@ -854,7 +883,11 @@ while [[ $# -gt 0 ]]; do
 			verbose=1
 			shift
 			;;
-		(-d|--dir|-r|-R|--recursive) #no-op, for rm compatibility
+		(-d|--dir) #no-op, for rm compatibility
+			shift
+			;;
+		(-r|-R|--recursive) #no-op (except for -I), for rm compatibility
+			recursive=1
 			shift
 			;;
 		(-l|--list)
@@ -872,17 +905,17 @@ while [[ $# -gt 0 ]]; do
 		(--interactive=never|--interactive=no|--interactive=none)
 			interactive=0
 			shift
-			echo "TODO: implement -i/-I/--interactive"; exit 5
 			;;
+		# Like rm, -i and -I cancel an earlier -f.
 		(-I|--interactive=once)
 			interactive=2
+			force=
 			shift
-			echo "TODO: implement -i/-I/--interactive"; exit 5
 			;;
 		(-i|--interactive|--interactive=always|--interactive=yes)
 			interactive=3
+			force=
 			shift
-			echo "TODO: implement -i/-I/--interactive"; exit 5
 			;;
 		(--interactive=*)
 			# message from GNU rm
@@ -1141,6 +1174,8 @@ fi
 # Check every argument before trashing anything.
 files=()
 trashdirs=()
+write_protecteds=()
+declined=
 for file in "$@"; do
 	if [ ! -e "$file" ] && [ ! -L "$file" ] && [ -n "$force" ]; then
 		# Like rm -f, silently ignore nonexistent files.
@@ -1152,9 +1187,18 @@ for file in "$@"; do
 	elif ! can_delete_file "$file"; then
 		[ -n "$force" ] || exit 1
 		failed=1
-	elif [ -z "$force" ] && ! is_writable_by_current_user "$file"; then
-		exit 1
 	else
+		write_protected=
+		if [ -z "$force" ] && ! is_writable_by_current_user "$file"; then
+			# Like rm, ask about write-protected files (with -i, or when stdin
+			# is a terminal), but where rm would go ahead without asking, refuse.
+			if [ "$interactive" -ge 3 ] || { [ "$interactive" -ge 1 ] && [ -t 0 ]; }; then
+				write_protected=1
+			else
+				echo "zap: The file '$file' is not writable by the current user. Use --force to override." >&2
+				exit 1
+			fi
+		fi
 		file=$(get_abs_filename "$file")
 		trash=$(trash_dir_for "$file")
 		if ! preflight_check "$file" "$trash"; then
@@ -1162,11 +1206,52 @@ for file in "$@"; do
 			failed=1
 			continue
 		fi
-		[ -z "$verbose" ] || echo "Will zap $file"
 		files+=("$file")
 		trashdirs+=("$trash")
+		write_protecteds+=("$write_protected")
 	fi
 done
+
+# Prompt only after checking everything, so nothing is asked about if we're
+# going to fail anyway.
+if [ "$interactive" -eq 2 ] && { [ -n "$recursive" ] || [ "${#files[@]}" -gt 3 ]; }; then
+	n=${#files[@]}
+	if [ -n "$recursive" ]; then
+		prompt="zap: trash $n argument$([ "$n" -eq 1 ] || echo s) recursively? "
+	else
+		prompt="zap: trash $n arguments? "
+	fi
+	confirm "$prompt" || exit 0
+fi
+if [ "$interactive" -ge 1 ]; then
+	confirmed_files=() confirmed_trashdirs=()
+	i=0
+	while [ "$i" -lt "${#files[@]}" ]; do
+		file=${files[$i]}
+		if [ -n "${write_protecteds[$i]}" ]; then
+			prompt="zap: trash write-protected $(describe_file_type "$file") '$file'? "
+		elif [ "$interactive" -ge 3 ]; then
+			prompt="zap: trash $(describe_file_type "$file") '$file'? "
+		else
+			prompt=
+		fi
+		if [ -z "$prompt" ] || confirm "$prompt"; then
+			confirmed_files+=("$file")
+			confirmed_trashdirs+=("${trashdirs[$i]}")
+		else
+			declined=1
+		fi
+		i=$((i + 1))
+	done
+	files=(${confirmed_files[@]+"${confirmed_files[@]}"})
+	trashdirs=(${confirmed_trashdirs[@]+"${confirmed_trashdirs[@]}"})
+fi
+
+if [ -n "$verbose" ]; then
+	for file in ${files[@]+"${files[@]}"}; do
+		echo "Will zap $file"
+	done
+fi
 set -- ${files[@]+"${files[@]}"}
 
 for file in "$@"; do
@@ -1174,7 +1259,7 @@ for file in "$@"; do
 done
 
 if [[ $# -eq 0 ]]; then
-	if [ -n "$force" ]; then
+	if [ -n "$force" ] || [ -n "$declined" ]; then
 		[ -z "$failed" ] || exit 1
 		exit
 	else
