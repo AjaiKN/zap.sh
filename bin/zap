@@ -91,6 +91,9 @@ Put each FILE in the trash. Currently supports macOS and Linux.
       --no-preserve-root   Don't treat '/' specially.
       --preserve-root      Refuse to trash '/' (default). With --force, '/' is skipped but the other
                            arguments are still trashed, and the exit status is 1.
+      --allow-root         Trash files even when running as root (e.g. under sudo). Without this, zap
+                           refuses, since they'd go to root's trash rather than yours. Can also be
+                           enabled with ZAP_ALLOW_ROOT=1. Not needed for the dangerous_* strategies.
   -d, --dir                Does nothing. For compatibility with rm.
   -r, -R, --recursive      Does nothing (except with -I). For compatibility with rm.
 
@@ -865,11 +868,7 @@ interactive=1
 # whether -r/-R/--recursive was given (only affects -I's prompt, like rm)
 recursive=
 preserve_root=1
-# TODO: maybe add --sudo option (or maybe prompt in that case if interactive>=1)
-# that uses sudo to change the ownership before trashing if we don't have the
-# permissions, since:
-# 1. sudo changes $HOME to /root and unsets $XDG_DATA_HOME on Linux, and
-# 2. we probably don't want unmovable stuff in our user trash
+allow_root=
 while [[ $# -gt 0 ]]; do
 	opt="$1"
 	case "$1" in
@@ -912,6 +911,10 @@ while [[ $# -gt 0 ]]; do
 			;;
 		(--no-preserve-root)
 			preserve_root=
+			shift
+			;;
+		(--allow-root)
+			allow_root=1
 			shift
 			;;
 		(--interactive=never|--interactive=no|--interactive=none)
@@ -1123,6 +1126,19 @@ choose_strategy() {
 
 ZAP_STRATEGY=${ZAP_STRATEGY:-$(choose_strategy)}
 [ -n "$verbose" ] && echo "Using strategy: $ZAP_STRATEGY" >&2
+
+# As root, files would go to root's trash, where you probably won't look for
+# them. And on macOS, sudo keeps $HOME, so zap would also write root-owned
+# records (and maybe directories) into the invoking user's home.
+if [ "$EUID" -eq 0 ] && [ -z "$allow_root" ] && [ -z "${ZAP_ALLOW_ROOT:-}" ]; then
+	case "$ZAP_STRATEGY" in
+		(dangerous_rm|dangerous_shred) ;;
+		(*)
+			echo "zap: Refusing to run as root, since files would go to root's trash rather than yours. Use --allow-root (or set ZAP_ALLOW_ROOT=1) to do it anyway." >&2
+			exit 1
+			;;
+	esac
+fi
 
 ## Checks
 

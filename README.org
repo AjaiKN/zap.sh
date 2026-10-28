@@ -45,6 +45,9 @@ Put each FILE in the trash. Currently supports macOS and Linux.
       --no-preserve-root   Don't treat '/' specially.
       --preserve-root      Refuse to trash '/' (default). With --force, '/' is skipped but the other
                            arguments are still trashed, and the exit status is 1.
+      --allow-root         Trash files even when running as root (e.g. under sudo). Without this, zap
+                           refuses, since they'd go to root's trash rather than yours. Can also be
+                           enabled with ZAP_ALLOW_ROOT=1. Not needed for the dangerous_* strategies.
   -d, --dir                Does nothing. For compatibility with rm.
   -r, -R, --recursive      Does nothing (except with -I). For compatibility with rm.
 

@@ -7,6 +7,8 @@ require "expect"
 require "pty"
 
 ENV["PATH"] = File.realpath(__dir__ + "/../bin") + ":" + ENV["PATH"]
+# zap refuses to run as root by default
+ENV["ZAP_ALLOW_ROOT"] = "1" if Process.uid == 0
 
 def strategy strat
 	ENV['ZAP_STRATEGY'] = strat
@@ -578,6 +580,27 @@ class TestZap < Minitest::Test
 		strategy "freedesktop"
 		out = `zap -n --no-preserve-root -- / 2>&1`
 		refute_match(/--no-preserve-root/, out)
+	end
+
+	def test_refuses_as_root
+		skip "running as root" if Process.uid == 0
+		skip "needs passwordless sudo" unless system "sudo", "-n", "true", out: File::NULL, err: File::NULL
+		zap = File.realpath(__dir__ + "/../bin/zap")
+		mktmpdir_home do |dir|
+			Dir.chdir dir do
+				File.write "f", "f"
+				out, status = Open3.capture2e "sudo", "-n", "env", "ZAP_STRATEGY=freedesktop", zap, "--", "f"
+				assert_equal 1, status.exitstatus
+				assert_match(/--allow-root/, out)
+				assert File.exist? "f"
+
+				out, status = Open3.capture2e "sudo", "-n", "env", "ZAP_STRATEGY=freedesktop", zap, "-n", "--allow-root", "--", "f"
+				assert status.success?, out
+				out, status = Open3.capture2e "sudo", "-n", "env", "ZAP_STRATEGY=freedesktop", "ZAP_ALLOW_ROOT=1", zap, "-n", "--", "f"
+				assert status.success?, out
+				assert File.exist? "f"
+			end
+		end
 	end
 
 	def test_force_skips_untrashable_and_exits_1

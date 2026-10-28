@@ -22,6 +22,7 @@ _arguments -s \
 	'(-s --strategy=)'{-s,--strategy=}'[Specify which trashing strategy to use]:strategy:(( $strategies ))' \
 	'(- *)'{-l,--list}'[List trashed files (freedesktop strategy only)]' \
 	'(-l --list)--restore[Restore each FILE (by original path) from the trash]' \
+	'--allow-root[Trash files even when running as root]' \
 	'(-d --dir)'{-d,--dir}'[Does nothing. For compatibility with rm]' \
 	'(-r -R --recursive)'{-r,-R,--recursive}'[Does nothing. For compatibility with rm]' \
 	'*:file:_files'

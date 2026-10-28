@@ -67,6 +67,11 @@ Don't treat '/' specially.
 Refuse to trash '/' (default). With \fB\-\-force\fR, '/' is skipped but the other
 arguments are still trashed, and the exit status is 1.
 .TP
+\fB\-\-allow\-root\fR
+Trash files even when running as root (e.g. under sudo). Without this, zap
+refuses, since they'd go to root's trash rather than yours. Can also be
+enabled with ZAP_ALLOW_ROOT=1. Not needed for the dangerous_* strategies.
+.TP
 \fB\-d\fR, \fB\-\-dir\fR
 Does nothing. For compatibility with rm.
 .TP
