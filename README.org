@@ -7,15 +7,6 @@ brew install ajaikn/tap/zap.sh
 *** Manual
 - Copy or symlink =bin/zap= into a directory on your PATH.
 - To install zsh completions /(optional)/: copy =completions/zsh/_zap= into your zsh completions directory, or source =zap.plugin.zsh=.
-** Behaviour compared with =rm=
-=zap= accepts the same flags as =rm= and tries to behave like it, but a little more strictly:
-- *Fail fast.* Before trashing anything, =zap= checks every argument: that it exists, that it can be moved (e.g. its parent directory is writable), that it isn't inside or around the trash directory, and, when it has to be copied to the trash on another filesystem, that everything inside it is readable and every directory inside it is writable. If any argument fails, nothing is trashed.
-- *Refuse where =rm= would prompt.* =rm= asks before deleting a write-protected file when standard input is a terminal (and deletes it without asking otherwise). =zap= refuses either way; use =--force= to override.
-- *=-f= / =--force= works like =rm -f=.* Nonexistent files are silently ignored, write-protected files are trashed anyway, and anything else that can't be trashed is reported and skipped while the rest are still trashed, with exit status 1. =--force= never overrides the trash directory check.
-- =--restore= works the same way: every argument is checked before anything is restored.
-
-** Restoring on macOS
-macOS doesn't record where trashed files came from in a form other tools can read, so when zap trashes something with one of the =macos_*= strategies, it writes its own record (a =.trashinfo= file with extra =X-Zap-*= keys) to =$XDG_DATA_HOME/zap/info= (default =~/.local/share/zap/info=). =zap --list= and =zap --restore= use these records, so they only know about files that zap itself trashed.
 
 ** Usage
 #+begin_src
@@ -59,8 +50,12 @@ Put each FILE in the trash. Currently supports macOS and Linux.
   dangerous_rm             Use rm
   dangerous_shred          Use GNU shred
 #+end_src
+
 ** Limitations
 - File names ending in a newline aren't supported; =zap= refuses to trash (or restore) them.
+
+** Restoring on macOS
+macOS doesn't record where trashed files came from in a form other tools can read, so when zap trashes something with one of the =macos_*= strategies, it writes its own record (a =.trashinfo= file with extra =X-Zap-*= keys) to =$XDG_DATA_HOME/zap/info= (default =~/.local/share/zap/info=). =zap --list= and =zap --restore= use these records, so they only know about files that zap itself trashed.
 
 ** Comparison table
 Based on [[https://github.com/umlx5h/gtrash/blob/main/doc/alternatives.md?plain=1][gtrash's comparison table]].
