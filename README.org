@@ -42,6 +42,9 @@ Put each FILE in the trash. Currently supports macOS and Linux.
                            trash directories, plus items zap trashed with the macOS strategies (recorded
                            in $XDG_DATA_HOME/zap/info). Items trashed with other tools on macOS aren't
                            seen.
+      --no-preserve-root   Don't treat '/' specially.
+      --preserve-root      Refuse to trash '/' (default). With --force, '/' is skipped but the other
+                           arguments are still trashed, and the exit status is 1.
   -d, --dir                Does nothing. For compatibility with rm.
   -r, -R, --recursive      Does nothing (except with -I). For compatibility with rm.
 

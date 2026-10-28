@@ -60,6 +60,13 @@ trash directories, plus items zap trashed with the macOS strategies (recorded
 in \fI\,$XDG_DATA_HOME/zap/info\/\fP). Items trashed with other tools on macOS aren't
 seen.
 .TP
+\fB\-\-no\-preserve\-root\fR
+Don't treat '/' specially.
+.TP
+\fB\-\-preserve\-root\fR
+Refuse to trash '/' (default). With \fB\-\-force\fR, '/' is skipped but the other
+arguments are still trashed, and the exit status is 1.
+.TP
 \fB\-d\fR, \fB\-\-dir\fR
 Does nothing. For compatibility with rm.
 .TP

@@ -546,6 +546,40 @@ class TestZap < Minitest::Test
 		end
 	end
 
+	def test_preserve_root
+		strategy "freedesktop"
+		with_isolated_trash do
+			File.write "good", "g"
+			["/", "//", "/.", "#{Dir.pwd}/#{"../" * Dir.pwd.count("/")}"].each do |root|
+				out, status = Open3.capture2e "zap", "--", root, "good"
+				assert_equal 1, status.exitstatus
+				assert_match(/--no-preserve-root/, out)
+				assert File.exist? "good"
+			end
+			system "zap", "-f", "--", "/", "good", out: File::NULL, err: File::NULL
+			assert_equal 1, $?.exitstatus
+			refute File.exist? "good"
+		end
+	end
+
+	def test_preserve_root_allows_symlink_to_root
+		strategy "freedesktop"
+		with_isolated_trash do |trash|
+			File.symlink "/", "rootlink"
+			system "zap", "--", "rootlink", out: File::NULL, err: File::NULL
+			assert $?.success?
+			refute File.symlink? "rootlink"
+			assert_equal ["rootlink"], Dir.children("#{trash}/files")
+		end
+	end
+
+	def test_no_preserve_root_gets_past_the_check
+		skip "running as root" if Process.uid == 0
+		strategy "freedesktop"
+		out = `zap -n --no-preserve-root -- / 2>&1`
+		refute_match(/--no-preserve-root/, out)
+	end
+
 	def test_force_skips_untrashable_and_exits_1
 		skip "running as root" if Process.uid == 0
 		strategy "freedesktop"

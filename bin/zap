@@ -88,6 +88,9 @@ Put each FILE in the trash. Currently supports macOS and Linux.
                            trash directories, plus items zap trashed with the macOS strategies (recorded
                            in \$XDG_DATA_HOME/zap/info). Items trashed with other tools on macOS aren't
                            seen.
+      --no-preserve-root   Don't treat '/' specially.
+      --preserve-root      Refuse to trash '/' (default). With --force, '/' is skipped but the other
+                           arguments are still trashed, and the exit status is 1.
   -d, --dir                Does nothing. For compatibility with rm.
   -r, -R, --recursive      Does nothing (except with -I). For compatibility with rm.
 
@@ -861,6 +864,7 @@ verbose=
 interactive=1
 # whether -r/-R/--recursive was given (only affects -I's prompt, like rm)
 recursive=
+preserve_root=1
 # TODO: maybe add --sudo option (or maybe prompt in that case if interactive>=1)
 # that uses sudo to change the ownership before trashing if we don't have the
 # permissions, since:
@@ -900,6 +904,14 @@ while [[ $# -gt 0 ]]; do
 			;;
 		(-v|--verbose)
 			verbose=1
+			shift
+			;;
+		(--preserve-root)
+			preserve_root=1
+			shift
+			;;
+		(--no-preserve-root)
+			preserve_root=
 			shift
 			;;
 		(--interactive=never|--interactive=no|--interactive=none)
@@ -1171,6 +1183,13 @@ if [ "$ZAP_STRATEGY" = freedesktop ]; then
 	home_mountpoint=$(mountpoint_of "${XDG_DATA_HOME:-$HOME/.local/share}") || home_mountpoint=
 fi
 
+# is_root_dir FILE
+# Succeeds if FILE resolves to '/'. A symlink to '/' doesn't count (trashing it
+# only trashes the link), unless it's given with a trailing slash.
+is_root_dir() {
+	[ ! -L "$1" ] && [ "$1" -ef / ]
+}
+
 # Check every argument before trashing anything.
 files=()
 trashdirs=()
@@ -1182,6 +1201,11 @@ for file in "$@"; do
 		continue
 	elif [[ $file == *$'\n' ]]; then
 		echo "zap: Can't trash '$file': file names ending in a newline aren't supported" >&2
+		[ -n "$force" ] || exit 1
+		failed=1
+	elif [ -n "$preserve_root" ] && is_root_dir "$file"; then
+		# Like rm, this also catches spellings like '/.', '//' and 'a/..' that resolve to '/'.
+		echo "zap: it is dangerous to operate recursively on '$file' (same as '/'); use --no-preserve-root to override" >&2
 		[ -n "$force" ] || exit 1
 		failed=1
 	elif ! can_delete_file "$file"; then
