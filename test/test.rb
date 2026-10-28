@@ -863,6 +863,8 @@ class TestZap < Minitest::Test
 			PTY.spawn("zap", "--", "ro") do |r, w, pid|
 				r.expect(/write-protected regular file .*\? /, 10) or flunk "no prompt"
 				w.puts "y"
+				# macOS won't let the child exit until its tty output is drained.
+				r.read rescue Errno::EIO
 				Process.wait pid
 			end
 			assert $?.success?
