@@ -60,6 +60,10 @@ trash directories, plus items zap trashed with the macOS strategies (recorded
 in \fI\,$XDG_DATA_HOME/zap/info\/\fP). Items trashed with other tools on macOS aren't
 seen.
 .TP
+\fB\-\-one\-file\-system\fR
+Refuse to trash a directory that has another filesystem mounted somewhere
+inside it. (rm skips just those parts, but zap trashes each FILE whole.)
+.TP
 \fB\-\-no\-preserve\-root\fR
 Don't treat '/' specially.
 .TP

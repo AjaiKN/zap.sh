@@ -88,6 +88,8 @@ Put each FILE in the trash. Currently supports macOS and Linux.
                            trash directories, plus items zap trashed with the macOS strategies (recorded
                            in \$XDG_DATA_HOME/zap/info). Items trashed with other tools on macOS aren't
                            seen.
+      --one-file-system    Refuse to trash a directory that has another filesystem mounted somewhere
+                           inside it. (rm skips just those parts, but zap trashes each FILE whole.)
       --no-preserve-root   Don't treat '/' specially.
       --preserve-root      Refuse to trash '/' (default). With --force, '/' is skipped but the other
                            arguments are still trashed, and the exit status is 1.
@@ -403,11 +405,12 @@ write_trashinfo() (
 list_mountpoints() {
 	df -P "$@" | {
 		IFS= read -r _header_line
-		local regex='^.* +[0-9]+ +[0-9]+ +[0-9]+ +[0-9]+%? +(/.*)$'
+		# (pseudo-filesystems, shown with df -a, can have '-' in the number columns)
+		local regex='^.* +([0-9]+|-) +([0-9]+|-) +([0-9]+|-) +([0-9]+%?|-) +(/.*)$'
 		local ret=0 line
 		while IFS= read -r line; do
 			if [[ $line =~ $regex ]]; then
-				mountpoint=${BASH_REMATCH[1]}
+				mountpoint=${BASH_REMATCH[5]}
 				printf '%s\n' "$mountpoint"
 			else
 				printf "Can't parse df -P output line: '%s'\n" "$line" >&2
@@ -865,6 +868,7 @@ interactive=1
 # whether -r/-R/--recursive was given (only affects -I's prompt, like rm)
 recursive=
 preserve_root=1
+one_file_system=
 # TODO: maybe add --sudo option (or maybe prompt in that case if interactive>=1)
 # that uses sudo to change the ownership before trashing if we don't have the
 # permissions, since:
@@ -912,6 +916,10 @@ while [[ $# -gt 0 ]]; do
 			;;
 		(--no-preserve-root)
 			preserve_root=
+			shift
+			;;
+		(--one-file-system)
+			one_file_system=1
 			shift
 			;;
 		(--interactive=never|--interactive=no|--interactive=none)
@@ -1190,6 +1198,20 @@ is_root_dir() {
 	[ ! -L "$1" ] && [ "$1" -ef / ]
 }
 
+# mountpoint_inside FILE
+# Prints the first mount point strictly inside the directory FILE, if any.
+mountpoint_inside() {
+	local dir mountpoint
+	[ -d "$1" ] && [ ! -L "$1" ] || return 0
+	dir=$(cd -P -- "$1" && pwd -P) || return 2
+	list_mountpoints -a | while IFS= read -r mountpoint; do
+		if [[ $mountpoint == "${dir%/}"/* ]]; then
+			printf '%s\n' "$mountpoint"
+			break
+		fi
+	done
+}
+
 # Check every argument before trashing anything.
 files=()
 trashdirs=()
@@ -1206,6 +1228,10 @@ for file in "$@"; do
 	elif [ -n "$preserve_root" ] && is_root_dir "$file"; then
 		# Like rm, this also catches spellings like '/.', '//' and 'a/..' that resolve to '/'.
 		echo "zap: it is dangerous to operate recursively on '$file' (same as '/'); use --no-preserve-root to override" >&2
+		[ -n "$force" ] || exit 1
+		failed=1
+	elif [ -n "$one_file_system" ] && mountpoint=$(mountpoint_inside "$file") && [ -n "$mountpoint" ]; then
+		echo "zap: Can't trash '$file': '$mountpoint' inside it is on a different filesystem (--one-file-system)" >&2
 		[ -n "$force" ] || exit 1
 		failed=1
 	elif ! can_delete_file "$file"; then

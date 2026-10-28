@@ -580,6 +580,33 @@ class TestZap < Minitest::Test
 		refute_match(/--no-preserve-root/, out)
 	end
 
+	def test_one_file_system
+		skip "mount tests only run on Linux" unless RUBY_PLATFORM =~ /linux/
+		skip "needs passwordless sudo to mount a tmpfs" unless system "sudo", "-n", "true", out: File::NULL, err: File::NULL
+		strategy "freedesktop"
+		with_isolated_trash do
+			FileUtils.mkdir_p "d/mnt"
+			File.write "good", "g"
+			system "sudo", "-n", "mount", "-t", "tmpfs", "tmpfs", "d/mnt", exception: true
+			begin
+				out, status = Open3.capture2e "zap", "--one-file-system", "--", "d", "good"
+				assert_equal 1, status.exitstatus
+				assert_match(/different filesystem/, out)
+				assert File.exist? "good"
+
+				system "zap", "-f", "--one-file-system", "--", "d", "good", out: File::NULL, err: File::NULL
+				assert_equal 1, $?.exitstatus
+				assert File.directory? "d/mnt"
+				refute File.exist? "good"
+			ensure
+				system "sudo", "-n", "umount", "d/mnt", exception: true
+			end
+			system "zap", "--one-file-system", "--", "d", out: File::NULL, err: File::NULL
+			assert $?.success?
+			refute File.exist? "d"
+		end
+	end
+
 	def test_force_skips_untrashable_and_exits_1
 		skip "running as root" if Process.uid == 0
 		strategy "freedesktop"
