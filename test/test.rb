@@ -589,7 +589,7 @@ class TestZap < Minitest::Test
 			File.write "good", "g"
 			system "sudo", "-n", "mount", "-t", "tmpfs", "tmpfs", "d/mnt", exception: true
 			begin
-				out, status = Open3.capture2e "zap", "--one-file-system", "--", "d", "good"
+				out, status = Open3.capture2e "zap", "--", "d", "good"
 				assert_equal 1, status.exitstatus
 				assert_match(/different filesystem/, out)
 				assert File.exist? "good"
@@ -604,6 +604,24 @@ class TestZap < Minitest::Test
 			system "zap", "--one-file-system", "--", "d", out: File::NULL, err: File::NULL
 			assert $?.success?
 			refute File.exist? "d"
+		end
+	end
+
+	def test_no_one_file_system
+		skip "mount tests only run on Linux" unless RUBY_PLATFORM =~ /linux/
+		skip "needs passwordless sudo to mount a tmpfs" unless system "sudo", "-n", "true", out: File::NULL, err: File::NULL
+		strategy "freedesktop"
+		with_isolated_trash do |trash|
+			FileUtils.mkdir_p "d/mnt"
+			system "sudo", "-n", "mount", "-t", "tmpfs", "tmpfs", "d/mnt", exception: true
+			begin
+				system "zap", "--no-one-file-system", "--", "d", out: File::NULL, err: File::NULL
+				assert $?.success?
+				refute File.exist? "d"
+			ensure
+				mnt = File.exist?("d/mnt") ? "d/mnt" : "#{trash}/files/d/mnt"
+				system "sudo", "-n", "umount", mnt, exception: true
+			end
 		end
 	end
 

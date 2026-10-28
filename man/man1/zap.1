@@ -62,7 +62,11 @@ seen.
 .TP
 \fB\-\-one\-file\-system\fR
 Refuse to trash a directory that has another filesystem mounted somewhere
-inside it. (rm skips just those parts, but zap trashes each FILE whole.)
+inside it (default). Otherwise the mount would go into the trash with it, and
+emptying the trash would delete what's on it. (rm skips just those parts, but
+zap trashes each FILE whole.)
+.HP
+\fB\-\-no\-one\-file\-system\fR Trash such directories anyway.
 .TP
 \fB\-\-no\-preserve\-root\fR
 Don't treat '/' specially.

@@ -43,7 +43,10 @@ Put each FILE in the trash. Currently supports macOS and Linux.
                            in $XDG_DATA_HOME/zap/info). Items trashed with other tools on macOS aren't
                            seen.
       --one-file-system    Refuse to trash a directory that has another filesystem mounted somewhere
-                           inside it. (rm skips just those parts, but zap trashes each FILE whole.)
+                           inside it (default). Otherwise the mount would go into the trash with it, and
+                           emptying the trash would delete what's on it. (rm skips just those parts, but
+                           zap trashes each FILE whole.)
+      --no-one-file-system Trash such directories anyway.
       --no-preserve-root   Don't treat '/' specially.
       --preserve-root      Refuse to trash '/' (default). With --force, '/' is skipped but the other
                            arguments are still trashed, and the exit status is 1.
