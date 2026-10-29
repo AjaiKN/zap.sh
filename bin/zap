@@ -96,6 +96,9 @@ Put each FILE in the trash. Currently supports macOS and Linux.
       --no-preserve-root   Don't treat '/' specially.
       --preserve-root      Refuse to trash '/' (default). With --force, '/' is skipped but the other
                            arguments are still trashed, and the exit status is 1.
+      --allow-root         Trash files even when running as root (e.g. under sudo). Without this, zap
+                           refuses, since they'd go to root's trash rather than yours. Can also be
+                           enabled with ZAP_ALLOW_ROOT=1. Not needed for the dangerous_* strategies.
   -d, --dir                Does nothing. For compatibility with rm.
   -r, -R, --recursive      Does nothing (except with -I). For compatibility with rm.
 
@@ -104,7 +107,8 @@ Put each FILE in the trash. Currently supports macOS and Linux.
                            https://specifications.freedesktop.org/trash-spec/1.0/
   macos_trash_command      (default on macOS >=15.0) Use the built-in macOS /usr/bin/trash command
   macos_applescript        (default on macOS <15.0) Use AppleScript
-  macos_mv                 Use mv to move to ~/.Trash/
+  macos_mv                 (default on macOS as root) Use mv to move to ~/.Trash/. Under sudo, that's the
+                           invoking user's trash, like Finder.
   gio                      Use the 'gio trash' command
   kioclient                Use the 'kioclient move FILE... trash:/' command
   trash_cli                Use trash-put from trash-cli: https://github.com/andreafrancia/trash-cli
@@ -260,6 +264,15 @@ stat_device() {
 		stat -c %d "$1"
 	elif [ "$stattype" = bsd ]; then
 		stat -f %d "$1"
+	else
+		return 2
+	fi
+}
+stat_owner() {
+	if [ "$stattype" = gnu ]; then
+		stat -c %u "$1"
+	elif [ "$stattype" = bsd ]; then
+		stat -f %u "$1"
 	else
 		return 2
 	fi
@@ -782,7 +795,7 @@ record_trashed() {
 # write_zap_record ORIGINALPATH TRASHEDPATH
 # Writes a record for an item that has been moved from ORIGINALPATH to TRASHEDPATH.
 write_zap_record() {
-	local thedate device inode mtime size
+	local thedate device inode mtime size name
 	if ! IFS=: read -r device inode mtime size < <(file_identity "$2"); then
 		echo "zap: Warning: couldn't stat '$2', so '$1' won't be restorable with --restore" >&2
 		return 1
@@ -790,16 +803,35 @@ write_zap_record() {
 	thedate=$(date +"%Y-%m-%dT%H:%M:%S")
 	if ! {
 		mkdir -p "$zap_recorddir/info" &&
-		write_trashinfo "$zap_recorddir" "$(mybasename "$1")" "$thedate" "$(
+		name=$(write_trashinfo "$zap_recorddir" "$(mybasename "$1")" "$thedate" "$(
 			printf '[Trash Info]\nPath=%s\nDeletionDate=%s\n' "$(urlencode "$1")" "$thedate"
 			printf 'X-Zap-Strategy=%s\nX-Zap-TrashedPath=%s\n' "$ZAP_STRATEGY" "$(urlencode "$2")"
 			printf 'X-Zap-Device=%s\nX-Zap-Inode=%s\nX-Zap-Mtime=%s\nX-Zap-Size=%s' \
 				"$device" "$inode" "$mtime" "$size"
-		)" >/dev/null
+		)")
 	}; then
 		echo "zap: Warning: couldn't write a record for '$1' in '$zap_recorddir/info', so it won't be restorable with --restore" >&2
 		return 1
 	fi
+	give_to_home_owner "$zap_recorddir/info/$name.trashinfo"
+}
+
+# give_to_home_owner FILE
+# As root with someone else's $HOME (e.g. under sudo on macOS), chown FILE and
+# any root-owned directories above it inside $HOME to $HOME's owner, so that
+# zap doesn't leave root-owned records (or directories) in their home.
+give_to_home_owner() {
+	local path="$1" owner
+	[ "$EUID" -eq 0 ] && [ -z "$dry_run" ] || return 0
+	owner=$(stat_owner "$HOME") || return 0
+	[ "$owner" -ne 0 ] || return 0
+	while [[ $path == "$HOME"/* ]]; do
+		if [ "$(stat_owner "$path")" = 0 ]; then
+			[ -z "$verbose" ] || echo "chown $owner '$path'" >&2
+			chown "$owner" "$path" || echo "zap: Warning: couldn't chown '$path' to UID $owner" >&2
+		fi
+		path=$(mydirname "$path")
+	done
 }
 
 # On macOS, listing ~/.Trash requires Full Disk Access. Call this when something
@@ -871,12 +903,8 @@ interactive=1
 # whether -r/-R/--recursive was given (only affects -I's prompt, like rm)
 recursive=
 preserve_root=1
+allow_root=
 one_file_system=1
-# TODO: maybe add --sudo option (or maybe prompt in that case if interactive>=1)
-# that uses sudo to change the ownership before trashing if we don't have the
-# permissions, since:
-# 1. sudo changes $HOME to /root and unsets $XDG_DATA_HOME on Linux, and
-# 2. we probably don't want unmovable stuff in our user trash
 while [[ $# -gt 0 ]]; do
 	opt="$1"
 	case "$1" in
@@ -919,6 +947,10 @@ while [[ $# -gt 0 ]]; do
 			;;
 		(--no-preserve-root)
 			preserve_root=
+			shift
+			;;
+		(--allow-root)
+			allow_root=1
 			shift
 			;;
 		(--one-file-system)
@@ -974,7 +1006,7 @@ Try '$0 --help' for more information."
 			set -- --strategy "$arg" "$@"
 			;;
 		(--version) # necessary for man2help
-			echo "zap.sh 0.0.16"
+			echo "zap.sh 0.0.17"
 			exit
 			;;
 		(--)
@@ -1122,7 +1154,16 @@ choose_strategy() {
 	esac
 
 	if [ "$(uname -s)" = "Darwin" ]; then
-		if [ -x /usr/bin/trash ]; then
+		if [ "$EUID" -eq 0 ]; then
+			# As root, /usr/bin/trash uses root's trash, which Finder never
+			# shows, even though sudo keeps $HOME. And Finder runs as the user,
+			# so when it can't move a file into the trash, it offers to delete
+			# it immediately instead. macos_mv moves things into $HOME/.Trash
+			# like Finder does for root-owned files (keeping their owner), and
+			# never deletes anything.
+			echo macos_mv
+			return
+		elif [ -x /usr/bin/trash ]; then
 			# introduced in macOS 15.0
 			echo macos_trash_command
 			return
@@ -1138,6 +1179,19 @@ choose_strategy() {
 
 ZAP_STRATEGY=${ZAP_STRATEGY:-$(choose_strategy)}
 [ -n "$verbose" ] && echo "Using strategy: $ZAP_STRATEGY" >&2
+
+# As root, files would go to root's trash, where you probably won't look for
+# them. (On macOS, sudo keeps $HOME, so with macos_mv they'd go to the user's
+# trash, but staying owned by root.)
+if [ "$EUID" -eq 0 ] && [ -z "$allow_root" ] && [ -z "${ZAP_ALLOW_ROOT:-}" ]; then
+	case "$ZAP_STRATEGY" in
+		(dangerous_rm|dangerous_shred) ;;
+		(*)
+			echo "zap: Refusing to run as root, since files would go to root's trash rather than yours. Use --allow-root (or set ZAP_ALLOW_ROOT=1) to do it anyway." >&2
+			exit 1
+			;;
+	esac
+fi
 
 ## Checks
 

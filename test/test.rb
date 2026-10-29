@@ -7,6 +7,8 @@ require "expect"
 require "pty"
 
 ENV["PATH"] = File.realpath(__dir__ + "/../bin") + ":" + ENV["PATH"]
+# zap refuses to run as root by default
+ENV["ZAP_ALLOW_ROOT"] = "1" if Process.uid == 0
 
 def strategy strat
 	ENV['ZAP_STRATEGY'] = strat
@@ -625,6 +627,59 @@ class TestZap < Minitest::Test
 		end
 	end
 
+	def test_refuses_as_root
+		skip "running as root" if Process.uid == 0
+		skip "needs passwordless sudo" unless system "sudo", "-n", "true", out: File::NULL, err: File::NULL
+		zap = File.realpath(__dir__ + "/../bin/zap")
+		mktmpdir_home do |dir|
+			Dir.chdir dir do
+				File.write "f", "f"
+				out, status = Open3.capture2e "sudo", "-n", "env", "ZAP_STRATEGY=freedesktop", zap, "--", "f"
+				assert_equal 1, status.exitstatus
+				assert_match(/--allow-root/, out)
+				assert File.exist? "f"
+
+				out, status = Open3.capture2e "sudo", "-n", "env", "ZAP_STRATEGY=freedesktop", zap, "-n", "--allow-root", "--", "f"
+				assert status.success?, out
+				out, status = Open3.capture2e "sudo", "-n", "env", "ZAP_STRATEGY=freedesktop", "ZAP_ALLOW_ROOT=1", zap, "-n", "--", "f"
+				assert status.success?, out
+				assert File.exist? "f"
+			end
+		end
+	end
+
+	## On macOS, sudo keeps $HOME, so files should go to the user's ~/.Trash
+	## (staying owned by root), with zap's record owned by the user.
+	def test_macos_sudo_uses_users_trash
+		skip "macOS only" unless RUBY_PLATFORM =~ /darwin/
+		skip "running as root" if Process.uid == 0
+		skip "needs passwordless sudo" unless system "sudo", "-n", "true", out: File::NULL, err: File::NULL
+		zap = File.realpath(__dir__ + "/../bin/zap")
+		mktmpdir_home do |dir|
+			Dir.chdir dir do
+				FileUtils.mkdir_p ["home/.Trash"]
+				system "sudo", "-n", "touch", "f", exception: true
+				env = ["sudo", "-n", "env", "HOME=#{dir}/home", zap, "--allow-root"]
+
+				out, status = Open3.capture2e(*env, "--", "f")
+				assert status.success?, out
+				refute File.exist? "f"
+				assert_equal ["f"], Dir.children("home/.Trash")
+				assert_equal 0, File.stat("home/.Trash/f").uid
+				infos = Dir.glob("home/.local/share/zap/info/*.trashinfo")
+				assert_equal 1, infos.size
+				["home/.local", "home/.local/share", "home/.local/share/zap", "home/.local/share/zap/info", infos[0]].each do |p|
+					assert_equal Process.uid, File.stat(p).uid, p
+				end
+
+				out, status = Open3.capture2e({"HOME" => "#{dir}/home"}, "zap", "--restore", "--", "f")
+				assert status.success?, out
+				assert File.exist? "f"
+				system "sudo", "-n", "rm", "f", exception: true
+			end
+		end
+	end
+
 	def test_force_skips_untrashable_and_exits_1
 		skip "running as root" if Process.uid == 0
 		strategy "freedesktop"
@@ -908,6 +963,8 @@ class TestZap < Minitest::Test
 			PTY.spawn("zap", "--", "ro") do |r, w, pid|
 				r.expect(/write-protected regular file .*\? /, 10) or flunk "no prompt"
 				w.puts "y"
+				# macOS won't let the child exit until its tty output is drained.
+				r.read rescue Errno::EIO
 				Process.wait pid
 			end
 			assert $?.success?
