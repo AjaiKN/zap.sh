@@ -28,6 +28,8 @@ _arguments -s \
 	'--allow-root[Trash files even when running as root]' \
 	'(--no-preserve-root)--preserve-root[Refuse to trash / (default)]' \
 	'(--preserve-root)--no-preserve-root[Don'\''t treat / specially]' \
+	'(--no-one-file-system)--one-file-system[Refuse to trash directories with mount points inside (default)]' \
+	'(--one-file-system)--no-one-file-system[Trash directories with mount points inside anyway]' \
 	'(-d --dir)'{-d,--dir}'[Does nothing. For compatibility with rm]' \
 	'(-r -R --recursive)'{-r,-R,--recursive}'[Does nothing (except with -I). For compatibility with rm]' \
 	'*:file:_files'
