@@ -1,0 +1,42 @@
+# bash completion for zap
+
+_zap() {
+	local cur prev words cword split
+	_init_completion -s || return
+
+	local strategies='freedesktop macos_trash_command macos_applescript macos_mv gio kioclient trash_cli dangerous_rm dangerous_shred'
+
+	case $prev in
+		-s|--strategy)
+			mapfile -t COMPREPLY < <(compgen -W "$strategies" -- "$cur")
+			return
+			;;
+		--interactive)
+			if [[ $split ]]; then
+				mapfile -t COMPREPLY < <(compgen -W 'never once always' -- "$cur")
+				return
+			fi
+			;;
+		-h|--help|-l|--list)
+			return
+			;;
+	esac
+	$split && return
+
+	local i
+	for ((i = 1; i < cword; i++)); do
+		if [[ ${words[i]} == -- ]]; then
+			_filedir
+			return
+		fi
+	done
+
+	if [[ $cur == -* ]]; then
+		mapfile -t COMPREPLY < <(compgen -W '-h --help -f --force -i -I --interactive --interactive= -n --dry-run -v --verbose -s --strategy= -l --list --restore --allow-root --preserve-root --no-preserve-root --one-file-system --no-one-file-system -d --dir -r -R --recursive --' -- "$cur")
+		[[ ${COMPREPLY-} == *= ]] && compopt -o nospace
+		return
+	fi
+
+	_filedir
+} &&
+	complete -F _zap zap
