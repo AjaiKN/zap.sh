@@ -80,6 +80,14 @@ Trash files even when running as root (e.g. under sudo). Without this, zap
 refuses, since they'd go to root's trash rather than yours. Can also be
 enabled with ZAP_ALLOW_ROOT=1. Not needed for the dangerous_* strategies.
 .TP
+\fB\-\-sudo\fR
+Use sudo to trash (or restore) files you don't have permission to move, rather
+than running zap itself as root. They go to your trash and are chowned to you
+(recursively), and their original owner and mode are recorded, so that
+\fB\-\-restore\fR \fB\-\-sudo\fR can give them back. (Without \fB\-\-sudo\fR, \fB\-\-restore\fR refuses to
+restore them.) Only for the freedesktop and macos_mv strategies; on macOS,
+it makes macos_mv the default.
+.TP
 \fB\-d\fR, \fB\-\-dir\fR
 Does nothing. For compatibility with rm.
 .TP

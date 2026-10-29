@@ -26,6 +26,7 @@ _arguments -s \
 	'(- *)'{-l,--list}'[List trashed files (oldest first)]' \
 	'(-l --list)--restore[Restore each FILE (by original path) from the trash]' \
 	'--allow-root[Trash files even when running as root]' \
+	'--sudo[Use sudo to trash or restore files you can'\''t move yourself]' \
 	'(--no-preserve-root)--preserve-root[Refuse to trash / (default)]' \
 	'(--preserve-root)--no-preserve-root[Don'\''t treat / specially]' \
 	'(--no-one-file-system)--one-file-system[Refuse to trash directories with mount points inside (default)]' \

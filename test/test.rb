@@ -627,6 +627,58 @@ class TestZap < Minitest::Test
 		end
 	end
 
+	def test_sudo_round_trip
+		skip "running as root" if Process.uid == 0
+		skip "needs passwordless sudo" unless system "sudo", "-n", "true", out: File::NULL, err: File::NULL
+		strategy "freedesktop"
+		with_isolated_trash do |trash|
+			mktmpdir_home do |dir|
+				Dir.chdir dir do
+					system "sudo", "-n", "sh", "-c", "mkdir rootdir && echo s >rootdir/f && chmod 4750 rootdir/f && mkdir rootdir/sub && touch rootdir/sub/g", exception: true
+					begin
+						out, status = Open3.capture2e "zap", "--", "rootdir/f"
+						assert_equal 1, status.exitstatus, out
+						assert File.exist? "rootdir/f"
+
+						out, status = Open3.capture2e "zap", "--sudo", "--", "rootdir/f", "rootdir/sub"
+						assert status.success?, out
+						assert_empty Dir.children("rootdir")
+						assert_equal ["f", "sub"], Dir.children("#{trash}/files").sort
+						["#{trash}/files/f", "#{trash}/files/sub", "#{trash}/files/sub/g"].each do |p|
+							assert_equal Process.uid, File.lstat(p).uid, p
+						end
+						info = File.read "#{trash}/info/f.trashinfo"
+						assert_match(/^X-Zap-Owner=0:0$/, info)
+						assert_match(/^X-Zap-Mode=4750$/, info)
+
+						out, status = Open3.capture2e "zap", "--restore", "--", "#{dir}/rootdir/f"
+						assert_equal 1, status.exitstatus, out
+						assert File.exist? "#{trash}/files/f"
+
+						out, status = Open3.capture2e "zap", "--sudo", "--restore", "--", "#{dir}/rootdir/f", "#{dir}/rootdir/sub"
+						assert status.success?, out
+						assert_empty Dir.children("#{trash}/files")
+						assert_empty Dir.children("#{trash}/info")
+						assert_equal 0, File.lstat("rootdir/sub/g").uid
+						st = File.lstat "rootdir/f"
+						assert_equal [0, 0, 0o4750], [st.uid, st.gid, st.mode & 0o7777]
+					ensure
+						system "sudo", "-n", "rm", "-rf", "rootdir"
+					end
+				end
+			end
+		end
+	end
+
+	def test_sudo_refused_as_root
+		skip "running as root" if Process.uid == 0
+		skip "needs passwordless sudo" unless system "sudo", "-n", "true", out: File::NULL, err: File::NULL
+		zap = File.realpath(__dir__ + "/../bin/zap")
+		out, status = Open3.capture2e "sudo", "-n", zap, "--sudo", "-n", "--", "nonexistent"
+		assert_equal 2, status.exitstatus
+		assert_match(/--sudo is for running zap as yourself/, out)
+	end
+
 	def test_refuses_as_root
 		skip "running as root" if Process.uid == 0
 		skip "needs passwordless sudo" unless system "sudo", "-n", "true", out: File::NULL, err: File::NULL

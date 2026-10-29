@@ -53,7 +53,13 @@ Put each FILE in the trash. Currently supports macOS and Linux.
       --allow-root         Trash files even when running as root (e.g. under sudo). Without this, zap
                            refuses, since they'd go to root's trash rather than yours. Can also be
                            enabled with ZAP_ALLOW_ROOT=1. Not needed for the dangerous_* strategies.
-  -d, --dir                Does nothing. For compatibility with rm.
+      --sudo               Use sudo to trash (or restore) files you don't have permission to move, rather
+                           than running zap itself as root. They go to your trash and are chowned to you
+                           (recursively), and their original owner and mode are recorded, so that
+                           --restore --sudo can give them back. (Without --sudo, --restore refuses to
+                           restore them.) Only for the freedesktop and macos_mv strategies; on macOS,
+                           it makes macos_mv the default.
+  -d, --dir               Does nothing. For compatibility with rm.
   -r, -R, --recursive      Does nothing (except with -I). For compatibility with rm.
 
 *Available strategies*

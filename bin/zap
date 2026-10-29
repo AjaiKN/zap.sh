@@ -99,7 +99,13 @@ Put each FILE in the trash. Currently supports macOS and Linux.
       --allow-root         Trash files even when running as root (e.g. under sudo). Without this, zap
                            refuses, since they'd go to root's trash rather than yours. Can also be
                            enabled with ZAP_ALLOW_ROOT=1. Not needed for the dangerous_* strategies.
-  -d, --dir                Does nothing. For compatibility with rm.
+      --sudo               Use sudo to trash (or restore) files you don't have permission to move, rather
+                           than running zap itself as root. They go to your trash and are chowned to you
+                           (recursively), and their original owner and mode are recorded, so that
+                           --restore --sudo can give them back. (Without --sudo, --restore refuses to
+                           restore them.) Only for the freedesktop and macos_mv strategies; on macOS,
+                           it makes macos_mv the default.
+  -d, --dir               Does nothing. For compatibility with rm.
   -r, -R, --recursive      Does nothing (except with -I). For compatibility with rm.
 
 *Available strategies*
@@ -146,6 +152,12 @@ urldecode() {
 	printf -v "$1" '%b' "${s//%/\\x}"
 }
 
+# Succeeds if permissions don't matter, since we're the superuser or can use
+# sudo (--sudo).
+is_privileged() {
+	[ "$EUID" -eq 0 ] || [ -n "$use_sudo" ]
+}
+
 can_delete_file() {
 	# File must exist.
 	# (If it's a broken symlink, -e will return false, but -L will return true.)
@@ -154,7 +166,7 @@ can_delete_file() {
 		return 1
 	fi
 	# If we're the superuser, we can always delete.
-	if [ "$EUID" -eq 0 ]; then
+	if is_privileged; then
 		return 0
 	fi
 	# To delete a file, all you need is write and execute permissions on its parent directory.
@@ -168,7 +180,7 @@ can_delete_file() {
 
 is_writable_by_current_user() {
 	# If we're the superuser, permissions don't matter.
-	if [ "$EUID" -eq 0 ]; then
+	if is_privileged; then
 		return 0
 	fi
 	# Permissions for a symlink don't matter (except on Mac, but only when following the symlink; deleting it is always fine).
@@ -212,7 +224,7 @@ is_same_filesystem() {
 
 can_read_file() {
 	# If we're the superuser, we can always read.
-	if [ "$EUID" -eq 0 ]; then
+	if is_privileged; then
 		return 0
 	fi
 	# Check if readable.
@@ -240,7 +252,7 @@ can_move_to() {
 				echo "zap: Can't trash '$file': it has to be copied to '$destdir' on another filesystem, but '$path' isn't readable" >&2
 				return 1
 			fi
-			if [ -d "$path" ] && { [ ! -w "$path" ] || [ ! -x "$path" ]; }; then
+			if [ -d "$path" ] && ! is_privileged && { [ ! -w "$path" ] || [ ! -x "$path" ]; }; then
 				echo "zap: Can't trash '$file': it has to be copied to '$destdir' on another filesystem, but the directory '$path' isn't writable, so the original couldn't be removed afterwards" >&2
 				return 1
 			fi
@@ -273,6 +285,17 @@ stat_owner() {
 		stat -c %u "$1"
 	elif [ "$stattype" = bsd ]; then
 		stat -f %u "$1"
+	else
+		return 2
+	fi
+}
+# stat_ownership FILE
+# Prints UID:GID:MODE (MODE in octal, including any setuid/setgid/sticky bits).
+stat_ownership() {
+	if [ "$stattype" = gnu ]; then
+		stat -c %u:%g:%a "$1"
+	elif [ "$stattype" = bsd ]; then
+		stat -f %u:%g:%Lp "$1"
 	else
 		return 2
 	fi
@@ -792,8 +815,9 @@ record_trashed() {
 	done 3<<<"$identities"
 }
 
-# write_zap_record ORIGINALPATH TRASHEDPATH
-# Writes a record for an item that has been moved from ORIGINALPATH to TRASHEDPATH.
+# write_zap_record ORIGINALPATH TRASHEDPATH [EXTRA]
+# Writes a record for an item that has been moved from ORIGINALPATH to
+# TRASHEDPATH. EXTRA (if given) is appended as more lines of the record.
 write_zap_record() {
 	local thedate device inode mtime size name
 	if ! IFS=: read -r device inode mtime size < <(file_identity "$2"); then
@@ -808,6 +832,7 @@ write_zap_record() {
 			printf 'X-Zap-Strategy=%s\nX-Zap-TrashedPath=%s\n' "$ZAP_STRATEGY" "$(urlencode "$2")"
 			printf 'X-Zap-Device=%s\nX-Zap-Inode=%s\nX-Zap-Mtime=%s\nX-Zap-Size=%s' \
 				"$device" "$inode" "$mtime" "$size"
+			[ -z "${3:-}" ] || printf '\n%s' "$3"
 		)")
 	}; then
 		echo "zap: Warning: couldn't write a record for '$1' in '$zap_recorddir/info', so it won't be restorable with --restore" >&2
@@ -837,6 +862,52 @@ give_to_home_owner() {
 # On macOS, listing ~/.Trash requires Full Disk Access. Call this when something
 # couldn't be found in the trash; it only warns once.
 warned_full_disk_access=
+### --sudo helpers
+
+# needs_sudo FILE
+# Succeeds if moving FILE into our trash (or emptying it from there later)
+# needs root: its parent directory isn't writable, or it (or anything inside it)
+# isn't ours.
+needs_sudo() {
+	local dir notours
+	dir=$(mydirname "$1") || return 0
+	{ [ -w "$dir" ] && [ -x "$dir" ]; } || return 0
+	notours=$(find "$1" ! -user "$UID" -print 2>/dev/null | head -n 1) || return 0
+	[ -n "$notours" ]
+}
+
+# sudo_prepare FILE
+# With --sudo, sets $sudo_this to whether FILE needs sudo to be trashed, and
+# $sudo_info to the record lines (X-Zap-Owner and X-Zap-Mode) that --restore
+# uses to give it its original owner back, or to nothing if that isn't needed.
+sudo_prepare() {
+	local ownership
+	sudo_this='' sudo_info=''
+	[ -n "$use_sudo" ] && needs_sudo "$1" || return 0
+	sudo_this=1
+	ownership=$(stat_ownership "$1") || return 0
+	if [ "${ownership%:*}" != "$UID:$GID" ]; then
+		sudo_info=$(printf 'X-Zap-Owner=%s\nX-Zap-Mode=%s' "${ownership%:*}" "${ownership##*:}")
+	fi
+}
+
+# trash_mv FILE DEST
+# Moves FILE to DEST, with sudo if $sudo_this is set (see sudo_prepare), in
+# which case it's then chowned (recursively) to us.
+trash_mv() {
+	if [ -z "$sudo_this" ]; then
+		[ -z "$verbose" ] || echo mv -i "'$1'" "'$2'" '</dev/null' >&2
+		[ -n "$dry_run" ] || mv -i "$1" "$2" </dev/null
+		return
+	fi
+	[ -z "$verbose" ] || echo sudo mv -i "'$1'" "'$2'" '</dev/null' >&2
+	[ -n "$dry_run" ] || sudo mv -i "$1" "$2" </dev/null || return 1
+	[ -z "$verbose" ] || echo sudo chown -R -P "$UID:$GID" "'$2'" >&2
+	if [ -z "$dry_run" ] && ! sudo chown -R -P "$UID:$GID" "$2"; then
+		echo "zap: Warning: couldn't chown '$2' to $UID:$GID" >&2
+	fi
+}
+
 warn_full_disk_access() {
 	[ -z "$warned_full_disk_access" ] || return 0
 	warned_full_disk_access=1
@@ -904,6 +975,7 @@ interactive=1
 recursive=
 preserve_root=1
 allow_root=
+use_sudo=
 one_file_system=1
 while [[ $# -gt 0 ]]; do
 	opt="$1"
@@ -951,6 +1023,10 @@ while [[ $# -gt 0 ]]; do
 			;;
 		(--allow-root)
 			allow_root=1
+			shift
+			;;
+		(--sudo)
+			use_sudo=1
 			shift
 			;;
 		(--one-file-system)
@@ -1034,6 +1110,17 @@ if [[ $# -eq 0 ]] && [ -z $force ] && [ "$action" = put ]; then
 	exit 2
 fi
 
+if [ -n "$use_sudo" ]; then
+	if [ "$EUID" -eq 0 ]; then
+		# (Under sudo, $HOME is root's on Linux, so we'd use root's trash anyway.)
+		echo "zap: --sudo is for running zap as yourself; it uses sudo itself when it needs to" >&2
+		exit 2
+	fi
+	GID=$(id -g)
+fi
+# Whether anything needs sudo (so that we can ask for the password up front).
+sudo_needed=
+
 ## List / restore
 
 # These look in every trash location zap knows about, regardless of strategy.
@@ -1090,17 +1177,50 @@ find_restore_candidate() {
 		return 1
 	fi
 	parent=$(mydirname "$restore_target") || return 1
-	if [ "$EUID" -ne 0 ] && { [ ! -w "$parent" ] || [ ! -x "$parent" ]; }; then
+	if ! is_privileged && { [ ! -w "$parent" ] || [ ! -x "$parent" ]; }; then
 		echo "zap: Can't restore '$restore_target': we don't have write and execute permissions on '$parent'" >&2
 		return 1
 	fi
-	if [ -d "$best_location" ] && [ ! -L "$best_location" ] && [ "$EUID" -ne 0 ] && [ ! -w "$best_location" ]; then
+	if [ -d "$best_location" ] && [ ! -L "$best_location" ] && ! is_privileged && [ ! -w "$best_location" ]; then
 		echo "zap: Can't restore '$restore_target': moving a directory requires write permission on it ('$best_location')" >&2
+		return 1
+	fi
+	# Items trashed with --sudo were chowned to us, and should get their
+	# original owner back.
+	restore_owner=$(sed -n 's/^X-Zap-Owner=//p' "$best_info" 2>/dev/null | head -n 1) || restore_owner=
+	restore_mode=$(sed -n 's/^X-Zap-Mode=//p' "$best_info" 2>/dev/null | head -n 1) || restore_mode=
+	if [ -n "$restore_owner" ] && [ "$EUID" -ne 0 ] && [ -z "$use_sudo" ]; then
+		echo "zap: Can't restore '$restore_target' without --sudo: it was owned by $restore_owner before it was trashed" >&2
 		return 1
 	fi
 	can_move_to "$parent" "$best_location" || return 1
 	restore_location=$best_location
 	restore_info=$best_info
+}
+
+# restore_mv LOCATION TARGET OWNER MODE
+# Moves LOCATION back to TARGET, with sudo if --sudo was given and it's needed,
+# and gives it its original OWNER (UID:GID) and MODE back, if given.
+restore_mv() {
+	local parent sudo=()
+	parent=$(mydirname "$2") || return 1
+	if [ -n "$use_sudo" ] && { [ -n "$3" ] || [ ! -w "$parent" ] || [ ! -x "$parent" ]; }; then
+		sudo=(sudo)
+	fi
+	[ -z "$verbose" ] || echo ${sudo[@]+"${sudo[@]}"} mv -i "'$1'" "'$2'" '</dev/null' >&2
+	[ -n "$dry_run" ] || ${sudo[@]+"${sudo[@]}"} mv -i "$1" "$2" </dev/null || return 1
+	[ -n "$3" ] || return 0
+	[ -z "$verbose" ] || echo ${sudo[@]+"${sudo[@]}"} chown -R -P "$3" "'$2'" >&2
+	if [ -z "$dry_run" ] && ! ${sudo[@]+"${sudo[@]}"} chown -R -P "$3" "$2"; then
+		echo "zap: Warning: couldn't give '$2' its original owner ($3) back" >&2
+	fi
+	# (chown clears setuid and setgid bits, so set the mode afterwards.)
+	if [ -n "$4" ] && [ ! -L "$2" ]; then
+		[ -z "$verbose" ] || echo ${sudo[@]+"${sudo[@]}"} chmod "$4" "'$2'" >&2
+		if [ -z "$dry_run" ] && ! ${sudo[@]+"${sudo[@]}"} chmod "$4" "$2"; then
+			echo "zap: Warning: couldn't give '$2' its original mode ($4) back" >&2
+		fi
+	fi
 }
 
 if [ "$action" = restore ]; then
@@ -1109,7 +1229,7 @@ if [ "$action" = restore ]; then
 		exit 2
 	fi
 	# Check every argument before restoring anything.
-	targets=() locations=() infos=()
+	targets=() locations=() infos=() owners=() modes=()
 	for file in "$@"; do
 		if find_restore_candidate "$file" && is_in_array "$restore_target" "${targets[@]+"${targets[@]}"}"; then
 			echo "zap: '$restore_target' was given more than once" >&2
@@ -1117,24 +1237,32 @@ if [ "$action" = restore ]; then
 			targets+=("$restore_target")
 			locations+=("$restore_location")
 			infos+=("$restore_info")
+			owners+=("$restore_owner")
+			modes+=("$restore_mode")
+			parent=$(mydirname "$restore_target")
+			if [ -n "$use_sudo" ] && { [ -n "$restore_owner" ] || [ ! -w "$parent" ] || [ ! -x "$parent" ]; }; then
+				sudo_needed=1
+			fi
 			continue
 		fi
 		[ -n "$force" ] || exit 1
 		failed=1
 	done
+	# Ask for the password (if needed) before restoring anything.
+	if [ -n "$sudo_needed" ] && [ -z "$dry_run" ] && ! sudo -v; then
+		echo "zap: Couldn't get sudo access, so nothing was restored" >&2
+		exit 1
+	fi
 	i=0
 	while [ "$i" -lt "${#targets[@]}" ]; do
-		[ -z "$verbose" ] || echo mv -i "'${locations[$i]}'" "'${targets[$i]}'" '</dev/null' >&2
-		if [ -z "$dry_run" ]; then
-			if mv -i "${locations[$i]}" "${targets[$i]}" </dev/null; then
-				command rm -f -- "${infos[$i]}"
-			else
-				echo "zap: Failed to restore '${targets[$i]}'" >&2
-				[ -n "$force" ] || exit 1
-				failed=1
-				i=$((i + 1))
-				continue
-			fi
+		if restore_mv "${locations[$i]}" "${targets[$i]}" "${owners[$i]}" "${modes[$i]}"; then
+			[ -n "$dry_run" ] || command rm -f -- "${infos[$i]}"
+		else
+			echo "zap: Failed to restore '${targets[$i]}'" >&2
+			[ -n "$force" ] || exit 1
+			failed=1
+			i=$((i + 1))
+			continue
 		fi
 		printf '%s\n' "${targets[$i]}"
 		i=$((i + 1))
@@ -1163,6 +1291,10 @@ choose_strategy() {
 			# never deletes anything.
 			echo macos_mv
 			return
+		elif [ -n "$use_sudo" ]; then
+			# --sudo needs zap to do the moving itself.
+			echo macos_mv
+			return
 		elif [ -x /usr/bin/trash ]; then
 			# introduced in macOS 15.0
 			echo macos_trash_command
@@ -1189,6 +1321,16 @@ if [ "$EUID" -eq 0 ] && [ -z "$allow_root" ] && [ -z "${ZAP_ALLOW_ROOT:-}" ]; th
 		(*)
 			echo "zap: Refusing to run as root, since files would go to root's trash rather than yours. Use --allow-root (or set ZAP_ALLOW_ROOT=1) to do it anyway." >&2
 			exit 1
+			;;
+	esac
+fi
+
+if [ -n "$use_sudo" ]; then
+	case "$ZAP_STRATEGY" in
+		(freedesktop|macos_mv) ;;
+		(*)
+			echo "zap: --sudo only works with the freedesktop and macos_mv strategies" >&2
+			exit 2
 			;;
 	esac
 fi
@@ -1230,7 +1372,7 @@ preflight_check() {
 	# permission on the directory itself (to update its ".." entry), so --force
 	# can't override that. (This is the behaviour on Linux; it's presumably the
 	# same on macOS and the BSDs, but I haven't verified that.)
-	if [ -d "$1" ] && [ ! -L "$1" ] && [ "$EUID" -ne 0 ] && [ ! -w "$1" ]; then
+	if [ -d "$1" ] && [ ! -L "$1" ] && ! is_privileged && [ ! -w "$1" ]; then
 		case "$ZAP_STRATEGY" in
 			(dangerous_*) ;;
 			(*)
@@ -1317,6 +1459,7 @@ for file in "$@"; do
 			failed=1
 			continue
 		fi
+		[ -z "$use_sudo" ] || ! needs_sudo "$file" || sudo_needed=1
 		files+=("$file")
 		trashdirs+=("$trash")
 		write_protecteds+=("$write_protected")
@@ -1383,6 +1526,12 @@ fi
 
 # check that none of the arguments are sub/superdirectories of the trash directory
 
+# Ask for the password (if needed) before trashing anything.
+if [ -n "$sudo_needed" ] && [ -z "$dry_run" ] && ! sudo -v; then
+	echo "zap: Couldn't get sudo access, so nothing was trashed" >&2
+	exit 1
+fi
+
 if [ -n "$force" ]; then
 	set +euo pipefail
 fi
@@ -1395,10 +1544,11 @@ case "$ZAP_STRATEGY" in
 			trash=${trashdirs[$i]}
 			i=$((i + 1))
 			thedate=$(date +"%Y-%m-%dT%H:%M:%S")
+			sudo_prepare "$file"
 			dest_filename=$(write_trashinfo "$trash" "$(mybasename "$file")" "$thedate" \
-				"$(printf '[Trash Info]\nPath=%s\nDeletionDate=%s' "$(urlencode "$file")" "$thedate")")
-			[ -z "$verbose" ] || echo mv -i "'$file'" "'$trash/files/$dest_filename'" '</dev/null' >&2
-			if [ -z "$dry_run" ] && ! mv -i "$file" "$trash/files/$dest_filename" </dev/null; then
+				"$(printf '[Trash Info]\nPath=%s\nDeletionDate=%s' "$(urlencode "$file")" "$thedate"
+				[ -z "$sudo_info" ] || printf '\n%s' "$sudo_info")")
+			if ! trash_mv "$file" "$trash/files/$dest_filename"; then
 				command rm -f -- "$trash/info/$dest_filename.trashinfo"
 				echo "zap: Failed to move '$file' to the trash" >&2
 				[ -n "$force" ] || exit 1
@@ -1444,15 +1594,13 @@ case "$ZAP_STRATEGY" in
 			while [ -e "$trash/$dest_filename" ] || [ -L "$trash/$dest_filename" ]; do
 				dest_filename="$dest_filename $(date +"%Y-%m-%dT%H:%M:%S")"
 			done
-			[ -z "$verbose" ] || echo mv -i "'$file'" "'$trash/$dest_filename'" '</dev/null' >&2
-			if [ -z "$dry_run" ]; then
-				if mv -i "$file" "$trash/$dest_filename" </dev/null; then
-					write_zap_record "$file" "$trash/$dest_filename" || :
-				else
-					echo "zap: Failed to move '$file' to the trash" >&2
-					[ -n "$force" ] || exit 1
-					failed=1
-				fi
+			sudo_prepare "$file"
+			if trash_mv "$file" "$trash/$dest_filename"; then
+				[ -n "$dry_run" ] || write_zap_record "$file" "$trash/$dest_filename" "$sudo_info" || :
+			else
+				echo "zap: Failed to move '$file' to the trash" >&2
+				[ -n "$force" ] || exit 1
+				failed=1
 			fi
 		done
 		;;
