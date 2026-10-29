@@ -1006,7 +1006,7 @@ Try '$0 --help' for more information."
 			set -- --strategy "$arg" "$@"
 			;;
 		(--version) # necessary for man2help
-			echo "zap.sh 0.0.17"
+			echo "zap.sh 0.1.0"
 			exit
 			;;
 		(--)
